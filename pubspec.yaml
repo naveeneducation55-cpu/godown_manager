@@ -1,0 +1,36 @@
+name: godown_inventory
+description: Offline Godown Inventory Management App - v1.0
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Local database
+  sqflite: ^2.3.0
+  path: ^1.8.3
+
+  # State management
+  provider: ^6.1.1
+
+  # Connectivity for sync
+  connectivity_plus: ^7.0.0
+
+  # Utilities
+  intl: ^0.20.2
+  shared_preferences: ^2.2.2
+
+  # Icons
+  cupertino_icons: ^1.0.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
