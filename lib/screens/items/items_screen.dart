@@ -1,0 +1,563 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+import '../../app_theme.dart';
+import '../../common_widgets.dart';
+import '../../providers/app_data_provider.dart';
+
+const _units = ['kg','gram','ton','litre','ml','pcs','dozen','box','bag','bundle'];
+String _unitDesc(String u) => const {
+  'kg':'kilogram','gram':'gram','ton':'metric ton','litre':'litre',
+  'ml':'millilitre','pcs':'pieces','dozen':'12 pieces',
+  'box':'box','bag':'bag','bundle':'bundle',
+}[u] ?? '';
+
+// ─── Main screen ──────────────────────────────────────────────────────────────
+class ManageScreen extends StatefulWidget {
+  const ManageScreen({super.key});
+  @override
+  State<ManageScreen> createState() => _ManageScreenState();
+}
+
+class _ManageScreenState extends State<ManageScreen>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabs;
+
+  @override
+  void initState() { super.initState(); _tabs = TabController(length: 3, vsync: this); }
+
+  @override
+  void dispose() { _tabs.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.appTheme;
+    return Scaffold(
+      backgroundColor: t.bg,
+      appBar: AppBar(
+        backgroundColor: t.surface,
+        leading: const AppBackButton(),
+        title: Text('Manage Data', style: AppFonts.heading(color: t.text).copyWith(fontSize: 16)),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(46),
+          child: Container(
+            color: t.surface,
+            child: TabBar(
+              controller: _tabs,
+              labelColor: t.primary,
+              unselectedLabelColor: t.text3,
+              indicatorColor: t.primary,
+              indicatorWeight: 2,
+              labelStyle: TextStyle(fontFamily: AppFonts.sans, fontSize: 13, fontWeight: FontWeight.w600),
+              unselectedLabelStyle: TextStyle(fontFamily: AppFonts.sans, fontSize: 13),
+              tabs: const [Tab(text:'Items'), Tab(text:'Godowns'), Tab(text:'Staff')],
+            ),
+          ),
+        ),
+      ),
+      body: TabBarView(
+        controller: _tabs,
+        children: const [_ItemsTab(), _GodownsTab(), _StaffTab()],
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ITEMS TAB
+// ═══════════════════════════════════════════════════════════════════════════════
+class _ItemsTab extends StatefulWidget {
+  const _ItemsTab();
+  @override
+  State<_ItemsTab> createState() => _ItemsTabState();
+}
+
+class _ItemsTabState extends State<_ItemsTab> {
+  String _search = '';
+  final  _ctrl   = TextEditingController();
+
+  @override
+  void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    final data     = context.watch<AppDataProvider>();
+    final filtered = data.items.where((i) =>
+        _search.isEmpty || i.name.toLowerCase().contains(_search.toLowerCase())).toList();
+
+    return Column(children: [
+      _SearchBar(ctrl: _ctrl, onChanged: (v) => setState(() => _search = v),
+          onAdd: () => _showItemSheet(context: context, existing: null,
+              onSave: (n, u) => context.read<AppDataProvider>().addItem(name: n, unit: u))),
+      Expanded(
+        child: filtered.isEmpty
+            ? EmptyState(icon: Icons.inventory_2_outlined,
+                message: _search.isEmpty ? 'No items yet.\nTap + to add.' : 'No items match "$_search"',
+                actionLabel: _search.isEmpty ? 'Add Item' : null,
+                onAction: _search.isEmpty ? () => _showItemSheet(context: context, existing: null,
+                    onSave: (n, u) => context.read<AppDataProvider>().addItem(name: n, unit: u)) : null)
+            : ListView.separated(
+                padding: const EdgeInsets.fromLTRB(12,12,12,100),
+                itemCount: filtered.length,
+                separatorBuilder: (_,__) => const SizedBox(height:8),
+                itemBuilder: (_,i) => _DataRow(
+                  avatar:   filtered[i].name[0].toUpperCase(),
+                  title:    filtered[i].name,
+                  meta:     filtered[i].unit,
+                  date:     filtered[i].createdAt,
+                  onEdit:   () => _showItemSheet(context: context, existing: filtered[i],
+                      onSave: (n, u) => context.read<AppDataProvider>()
+                          .editItem(id: filtered[i].id, name: n, unit: u)),
+                  onDelete: () async {
+                    final ok = await showDeleteConfirm(context, filtered[i].name);
+                    if (ok && context.mounted) context.read<AppDataProvider>().deleteItem(filtered[i].id);
+                  },
+                ),
+              ),
+      ),
+    ]);
+  }
+}
+
+void _showItemSheet({required BuildContext context, required ItemModel? existing,
+    required void Function(String, String) onSave}) {
+  showModalBottomSheet(context: context, isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _ItemSheet(existing: existing, onSave: onSave));
+}
+
+class _ItemSheet extends StatefulWidget {
+  final ItemModel? existing;
+  final void Function(String, String) onSave;
+  const _ItemSheet({required this.existing, required this.onSave});
+  @override State<_ItemSheet> createState() => _ItemSheetState();
+}
+
+class _ItemSheetState extends State<_ItemSheet> {
+  final _nameCtrl = TextEditingController();
+  final _formKey  = GlobalKey<FormState>();
+  String? _unit;
+  bool get _isEdit => widget.existing != null;
+
+  @override
+  void initState() { super.initState();
+    if (_isEdit) { _nameCtrl.text = widget.existing!.name; _unit = widget.existing!.unit; }
+  }
+  @override void dispose() { _nameCtrl.dispose(); super.dispose(); }
+
+  void _submit() {
+    if (!_formKey.currentState!.validate()) return;
+    if (_unit == null) { showError(context, 'Please select a unit'); return; }
+    widget.onSave(_nameCtrl.text.trim(), _unit!);
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t   = context.appTheme;
+    final bot = MediaQuery.of(context).viewInsets.bottom;
+    return _Sheet(title: _isEdit ? 'Edit Item' : 'Add Item', bottomPad: bot,
+      child: Form(key: _formKey, child: Column(mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          TextFormField(controller: _nameCtrl, textCapitalization: TextCapitalization.words,
+            style: AppFonts.body(color: t.text),
+            decoration: InputDecoration(labelText: 'Item name', hintText: 'e.g. Rice, Sugar',
+                prefixIcon: Icon(Icons.inventory_2_outlined, size:18, color:t.text3)),
+            validator: (v) => (v == null || v.trim().length < 2) ? 'Min 2 characters' : null),
+          const SizedBox(height: AppSpacing.md),
+          DropdownButtonFormField<String>(
+            value: _unit, dropdownColor: t.surface, style: AppFonts.body(color: t.text),
+            decoration: InputDecoration(labelText: 'Unit',
+                prefixIcon: Icon(Icons.scale_outlined, size:18, color:t.text3)),
+            icon: Icon(Icons.keyboard_arrow_down_rounded, color: t.text3),
+            items: _units.map((u) => DropdownMenuItem(value: u,
+              child: Row(children: [
+                Text(u, style: AppFonts.monoStyle(size:13, color:t.text)),
+                const SizedBox(width:8),
+                Text(_unitDesc(u), style: AppFonts.label(color:t.text3)),
+              ]))).toList(),
+            onChanged: (v) => setState(() => _unit = v),
+            validator: (_) => _unit == null ? 'Please select a unit' : null),
+          const SizedBox(height: AppSpacing.xl),
+          PrimaryButton(label: _isEdit ? 'Update Item' : 'Add Item',
+              icon: _isEdit ? Icons.check_rounded : Icons.add_rounded, onTap: _submit),
+        ])),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GODOWNS TAB
+// ═══════════════════════════════════════════════════════════════════════════════
+class _GodownsTab extends StatefulWidget {
+  const _GodownsTab();
+  @override State<_GodownsTab> createState() => _GodownsTabState();
+}
+
+class _GodownsTabState extends State<_GodownsTab> {
+  String _search = '';
+  final  _ctrl   = TextEditingController();
+
+  @override void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    final data     = context.watch<AppDataProvider>();
+    final filtered = data.locations.where((l) =>
+        _search.isEmpty || l.name.toLowerCase().contains(_search.toLowerCase())).toList();
+
+    return Column(children: [
+      _SearchBar(ctrl: _ctrl, onChanged: (v) => setState(() => _search = v),
+          onAdd: () => _showLocSheet(context: context, existing: null,
+              onSave: (n, tp) => context.read<AppDataProvider>().addLocation(name: n, type: tp))),
+      Expanded(
+        child: filtered.isEmpty
+            ? EmptyState(icon: Icons.warehouse_outlined,
+                message: _search.isEmpty ? 'No locations yet.' : 'No locations match "$_search"')
+            : ListView.separated(
+                padding: const EdgeInsets.fromLTRB(12,12,12,100),
+                itemCount: filtered.length,
+                separatorBuilder: (_,__) => const SizedBox(height:8),
+                itemBuilder: (_,i) => _DataRow(
+                  avatar:    filtered[i].type == 'shop' ? 'S' : 'G',
+                  avatarAlt: filtered[i].type == 'shop',
+                  title:     filtered[i].name,
+                  meta:      filtered[i].type,
+                  date:      filtered[i].createdAt,
+                  onEdit:    () => _showLocSheet(context: context, existing: filtered[i],
+                      onSave: (n, tp) => context.read<AppDataProvider>()
+                          .editLocation(id: filtered[i].id, name: n, type: tp)),
+                  onDelete: () async {
+                    final ok = await showDeleteConfirm(context, filtered[i].name);
+                    if (ok && context.mounted) context.read<AppDataProvider>().deleteLocation(filtered[i].id);
+                  },
+                ),
+              ),
+      ),
+    ]);
+  }
+}
+
+void _showLocSheet({required BuildContext context, required LocationModel? existing,
+    required void Function(String, String) onSave}) {
+  showModalBottomSheet(context: context, isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _LocSheet(existing: existing, onSave: onSave));
+}
+
+class _LocSheet extends StatefulWidget {
+  final LocationModel? existing;
+  final void Function(String, String) onSave;
+  const _LocSheet({required this.existing, required this.onSave});
+  @override State<_LocSheet> createState() => _LocSheetState();
+}
+
+class _LocSheetState extends State<_LocSheet> {
+  final _nameCtrl = TextEditingController();
+  final _formKey  = GlobalKey<FormState>();
+  String _type    = 'godown';
+  bool get _isEdit => widget.existing != null;
+
+  @override
+  void initState() { super.initState();
+    if (_isEdit) { _nameCtrl.text = widget.existing!.name; _type = widget.existing!.type; }
+  }
+  @override void dispose() { _nameCtrl.dispose(); super.dispose(); }
+
+  void _submit() {
+    if (!_formKey.currentState!.validate()) return;
+    widget.onSave(_nameCtrl.text.trim(), _type);
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t   = context.appTheme;
+    final bot = MediaQuery.of(context).viewInsets.bottom;
+    return _Sheet(title: _isEdit ? 'Edit Location' : 'Add Location', bottomPad: bot,
+      child: Form(key: _formKey, child: Column(mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          TextFormField(controller: _nameCtrl, textCapitalization: TextCapitalization.words,
+            style: AppFonts.body(color: t.text),
+            decoration: InputDecoration(labelText: 'Location name', hintText: 'e.g. Godown A',
+                prefixIcon: Icon(Icons.warehouse_outlined, size:18, color:t.text3)),
+            validator: (v) => (v == null || v.trim().length < 2) ? 'Min 2 characters' : null),
+          const SizedBox(height: AppSpacing.md),
+          Text('Type', style: AppFonts.label(color: t.text3)),
+          const SizedBox(height: 6),
+          Row(children: [
+            _TypeChip(label:'Godown', icon:Icons.warehouse_outlined,
+                selected:_type=='godown', onTap:()=>setState(()=>_type='godown')),
+            const SizedBox(width: AppSpacing.sm),
+            _TypeChip(label:'Shop',   icon:Icons.storefront_outlined,
+                selected:_type=='shop',   onTap:()=>setState(()=>_type='shop')),
+          ]),
+          const SizedBox(height: AppSpacing.xl),
+          PrimaryButton(label: _isEdit ? 'Update Location' : 'Add Location',
+              icon: _isEdit ? Icons.check_rounded : Icons.add_rounded, onTap: _submit),
+        ])),
+    );
+  }
+}
+
+class _TypeChip extends StatelessWidget {
+  final String label; final IconData icon; final bool selected; final VoidCallback onTap;
+  const _TypeChip({required this.label, required this.icon, required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.appTheme;
+    return Expanded(child: GestureDetector(onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm + 2),
+        decoration: BoxDecoration(
+          color: selected ? t.primary : t.surface,
+          borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+          border: Border.all(color: selected ? t.primary : t.border, width: selected ? 1.5 : 0.8),
+        ),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(icon, size:16, color: selected ? t.primaryFg : t.text2),
+          const SizedBox(width:6),
+          Text(label, style: TextStyle(fontFamily: AppFonts.sans, fontSize:13,
+              fontWeight: FontWeight.w500, color: selected ? t.primaryFg : t.text2)),
+        ]),
+      ),
+    ));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STAFF TAB
+// ═══════════════════════════════════════════════════════════════════════════════
+class _StaffTab extends StatefulWidget {
+  const _StaffTab();
+  @override State<_StaffTab> createState() => _StaffTabState();
+}
+
+class _StaffTabState extends State<_StaffTab> {
+  String _search = '';
+  final  _ctrl   = TextEditingController();
+
+  @override void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    final data     = context.watch<AppDataProvider>();
+    final filtered = data.staff.where((s) =>
+        _search.isEmpty || s.name.toLowerCase().contains(_search.toLowerCase())).toList();
+
+    return Column(children: [
+      _SearchBar(ctrl: _ctrl, onChanged: (v) => setState(() => _search = v),
+          onAdd: () => _showStaffSheet(context: context, existing: null,
+              onSave: (n, p) => context.read<AppDataProvider>().addStaff(name: n, pin: p))),
+      Expanded(
+        child: filtered.isEmpty
+            ? EmptyState(icon: Icons.people_outline_rounded,
+                message: _search.isEmpty ? 'No staff yet.' : 'No staff match "$_search"')
+            : ListView.separated(
+                padding: const EdgeInsets.fromLTRB(12,12,12,100),
+                itemCount: filtered.length,
+                separatorBuilder: (_,__) => const SizedBox(height:8),
+                itemBuilder: (_,i) => _DataRow(
+                  avatar:  filtered[i].name[0].toUpperCase(),
+                  title:   filtered[i].name,
+                  meta:    '●●●●',
+                  date:    filtered[i].createdAt,
+                  onEdit:  () => _showStaffSheet(context: context, existing: filtered[i],
+                      onSave: (n, p) => context.read<AppDataProvider>()
+                          .editStaff(id: filtered[i].id, name: n, pin: p)),
+                  onDelete: () async {
+                    final ok = await showDeleteConfirm(context, filtered[i].name);
+                    if (ok && context.mounted) context.read<AppDataProvider>().deleteStaff(filtered[i].id);
+                  },
+                ),
+              ),
+      ),
+    ]);
+  }
+}
+
+void _showStaffSheet({required BuildContext context, required StaffModel? existing,
+    required void Function(String, String) onSave}) {
+  showModalBottomSheet(context: context, isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _StaffSheet(existing: existing, onSave: onSave));
+}
+
+class _StaffSheet extends StatefulWidget {
+  final StaffModel? existing;
+  final void Function(String, String) onSave;
+  const _StaffSheet({required this.existing, required this.onSave});
+  @override State<_StaffSheet> createState() => _StaffSheetState();
+}
+
+class _StaffSheetState extends State<_StaffSheet> {
+  final _nameCtrl = TextEditingController();
+  final _pinCtrl  = TextEditingController();
+  final _formKey  = GlobalKey<FormState>();
+  bool  _showPin  = false;
+  bool get _isEdit => widget.existing != null;
+
+  @override
+  void initState() { super.initState();
+    if (_isEdit) { _nameCtrl.text = widget.existing!.name; _pinCtrl.text = widget.existing!.pin; }
+  }
+  @override void dispose() { _nameCtrl.dispose(); _pinCtrl.dispose(); super.dispose(); }
+
+  void _submit() {
+    if (!_formKey.currentState!.validate()) return;
+    widget.onSave(_nameCtrl.text.trim(), _pinCtrl.text.trim());
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t   = context.appTheme;
+    final bot = MediaQuery.of(context).viewInsets.bottom;
+    return _Sheet(title: _isEdit ? 'Edit Staff' : 'Add Staff', bottomPad: bot,
+      child: Form(key: _formKey, child: Column(mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          TextFormField(controller: _nameCtrl, textCapitalization: TextCapitalization.words,
+            style: AppFonts.body(color: t.text),
+            decoration: InputDecoration(labelText: 'Staff name',
+                prefixIcon: Icon(Icons.person_outline_rounded, size:18, color:t.text3)),
+            validator: (v) => (v == null || v.trim().length < 2) ? 'Min 2 characters' : null),
+          const SizedBox(height: AppSpacing.md),
+          TextFormField(controller: _pinCtrl,
+            obscureText: !_showPin, keyboardType: TextInputType.number,
+            maxLength: 4, inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            style: AppFonts.monoStyle(size:16, color:t.text, weight:FontWeight.w600),
+            decoration: InputDecoration(labelText: 'PIN (4 digits)', hintText: '●●●●',
+              counterText: '',
+              prefixIcon: Icon(Icons.lock_outline_rounded, size:18, color:t.text3),
+              suffixIcon: IconButton(
+                icon: Icon(_showPin ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                    size:18, color:t.text3),
+                onPressed: () => setState(() => _showPin = !_showPin))),
+            validator: (v) => (v == null || v.trim().length != 4) ? 'PIN must be 4 digits' : null),
+          const SizedBox(height: AppSpacing.xl),
+          PrimaryButton(label: _isEdit ? 'Update Staff' : 'Add Staff',
+              icon: _isEdit ? Icons.check_rounded : Icons.add_rounded, onTap: _submit),
+        ])),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SHARED WIDGETS
+// ═══════════════════════════════════════════════════════════════════════════════
+class _DataRow extends StatelessWidget {
+  final String avatar, title, meta;
+  final DateTime date;
+  final VoidCallback onEdit, onDelete;
+  final bool avatarAlt;
+  const _DataRow({required this.avatar, required this.title, required this.meta,
+      required this.date, required this.onEdit, required this.onDelete, this.avatarAlt = false});
+
+  @override
+  Widget build(BuildContext context) {
+    final t      = context.appTheme;
+    final accent = avatarAlt ? t.success : t.primary;
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(color: t.surface,
+          borderRadius: BorderRadius.circular(AppSpacing.radius),
+          border: Border.all(color: t.border, width: 0.8)),
+      child: Row(children: [
+        Container(width:40, height:40,
+          decoration: BoxDecoration(color: accent.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(AppSpacing.radiusSm)),
+          child: Center(child: Text(avatar,
+              style: AppFonts.monoStyle(size:16, weight:FontWeight.w700, color:accent)))),
+        const SizedBox(width: AppSpacing.md),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title, style: TextStyle(fontFamily:AppFonts.sans, fontSize:14,
+              fontWeight:FontWeight.w600, color:t.text)),
+          const SizedBox(height:3),
+          Row(children: [
+            Container(padding: const EdgeInsets.symmetric(horizontal:7, vertical:2),
+              decoration: BoxDecoration(color: accent.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(4)),
+              child: Text(meta, style: AppFonts.monoStyle(size:11, color:accent))),
+            const SizedBox(width:8),
+            Text(_fmtDate(date), style: AppFonts.monoStyle(size:10, color:t.text3)),
+          ]),
+        ])),
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          ActionButton(label:'edit',   icon:Icons.edit_outlined,         onTap:onEdit),
+          const SizedBox(width: AppSpacing.xs + 2),
+          ActionButton(label:'delete', icon:Icons.delete_outline_rounded, onTap:onDelete, danger:true),
+        ]),
+      ]),
+    );
+  }
+
+  String _fmtDate(DateTime d) {
+    const m = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return '${d.day} ${m[d.month-1]} ${d.year}';
+  }
+}
+
+class _SearchBar extends StatelessWidget {
+  final TextEditingController ctrl;
+  final ValueChanged<String>  onChanged;
+  final VoidCallback          onAdd;
+  const _SearchBar({required this.ctrl, required this.onChanged, required this.onAdd});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.appTheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12,12,12,4),
+      child: Row(children: [
+        Expanded(child: TextField(controller: ctrl, onChanged: onChanged,
+          style: AppFonts.body(color: t.text),
+          decoration: InputDecoration(hintText: 'Search...',
+            prefixIcon: Icon(Icons.search_rounded, size:18, color:t.text3),
+            suffixIcon: ctrl.text.isNotEmpty
+                ? IconButton(icon: Icon(Icons.close_rounded, size:16, color:t.text3),
+                    onPressed: () { ctrl.clear(); onChanged(''); })
+                : null,
+            contentPadding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.md, vertical: AppSpacing.sm)))),
+        const SizedBox(width: AppSpacing.sm),
+        GestureDetector(onTap: onAdd,
+          child: Container(width:40, height:40,
+            decoration: BoxDecoration(color: t.primary,
+                borderRadius: BorderRadius.circular(AppSpacing.radiusSm)),
+            child: Icon(Icons.add_rounded, size:20, color:t.primaryFg))),
+      ]),
+    );
+  }
+}
+
+class _Sheet extends StatelessWidget {
+  final String title; final Widget child; final double bottomPad;
+  const _Sheet({required this.title, required this.child, required this.bottomPad});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.appTheme;
+    return Container(
+      decoration: BoxDecoration(color: t.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          border: Border.all(color: t.border, width: 0.8)),
+      padding: EdgeInsets.fromLTRB(
+          AppSpacing.lg, AppSpacing.md, AppSpacing.lg, AppSpacing.lg + bottomPad),
+      child: Column(mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Center(child: Container(width:40, height:4,
+            decoration: BoxDecoration(color:t.border, borderRadius:BorderRadius.circular(99)))),
+        const SizedBox(height: AppSpacing.md),
+        Row(children: [
+          Text(title, style: AppFonts.heading(color: t.text)),
+          const Spacer(),
+          GestureDetector(onTap: () => Navigator.of(context).pop(),
+              child: Icon(Icons.close_rounded, size:20, color:t.text3)),
+        ]),
+        const SizedBox(height: AppSpacing.lg),
+        child,
+      ]),
+    );
+  }
+}
