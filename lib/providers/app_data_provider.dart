@@ -1,26 +1,17 @@
+import 'package:flutter/foundation.dart';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // app_data_provider.dart
 //
-// Central data store for the entire app.
-// Every screen reads from and writes to this provider.
+// Single source of truth for all app data.
+// Phase 2: swap method bodies with SQLite calls — screens unchanged.
 //
-// Phase 2 note:
-//   Every method marked with "// TODO Phase 2" will be replaced
-//   with a real SQLite DB call. The screens will NOT need to change —
-//   only the implementation inside each method changes.
-//
-// Data held:
-//   • items       — all inventory items
-//   • locations   — all godowns + shops
-//   • staff       — all staff members
-//   • movements   — all stock movements (the core transaction log)
-//
-// Stock calculation:
-//   Balance = incoming − outgoing  (spec section 8)
-//   Calculated on demand from movements — never stored separately
+// Memory notes:
+//   • All lists are plain List<T> — no StreamControllers, no duplicates
+//   • notifyListeners() called only after actual state change
+//   • getStock() computed on demand — not cached — avoids stale data
+//   • fromLocationId = -1 means external supplier (opening stock)
 // ─────────────────────────────────────────────────────────────────────────────
-
-import 'package:flutter/material.dart';
 
 // ─── Models ───────────────────────────────────────────────────────────────────
 
@@ -75,18 +66,18 @@ class StaffModel {
 }
 
 class MovementModel {
-  final int        id;
-  final int        itemId;
-  final int        fromLocationId;
-  final int        toLocationId;
-  final int        staffId;
-  final double     quantity;
-  final DateTime   createdAt;
-  bool             edited;
-  int?             editedBy;
-  DateTime?        editedAt;
-  String?          remark;
-  String           syncStatus; // 'pending' or 'synced'
+  final int      id;
+  final int      itemId;
+  final int      fromLocationId; // -1 = external supplier
+  final int      toLocationId;
+  final int      staffId;
+  final double   quantity;
+  final DateTime createdAt;
+  bool           edited;
+  int?           editedBy;
+  DateTime?      editedAt;
+  String?        remark;
+  String         syncStatus; // 'pending' | 'synced'
 
   MovementModel({
     required this.id,
@@ -104,7 +95,6 @@ class MovementModel {
   });
 }
 
-// ─── Stock result — returned by getStock() ────────────────────────────────────
 class StockBalance {
   final LocationModel location;
   final ItemModel     item;
@@ -121,96 +111,129 @@ class StockBalance {
 }
 
 // ─── Provider ─────────────────────────────────────────────────────────────────
+
 class AppDataProvider extends ChangeNotifier {
 
-  // ── Internal lists ──────────────────────────────────────────────────────────
+  // Private lists — only mutated through methods below
   final List<ItemModel>     _items     = [];
   final List<LocationModel> _locations = [];
   final List<StaffModel>    _staff     = [];
   final List<MovementModel> _movements = [];
 
-  // Currently logged-in staff (set by login screen)
   StaffModel? _currentStaff;
+  bool        _disposed = false;
 
-  // ID counters (DB auto-increments in Phase 2)
+  // Auto-increment counters (replaced by DB in Phase 2)
   int _itemId     = 1;
   int _locationId = 1;
   int _staffId    = 1;
   int _movementId = 1;
 
-  // ── Public read-only getters ─────────────────────────────────────────────────
-  List<ItemModel>     get items      => _items.where((i) => !i.isDeleted).toList();
-  List<LocationModel> get locations  => _locations.where((l) => !l.isDeleted).toList();
-  List<StaffModel>    get staff      => List.unmodifiable(_staff);
-  List<MovementModel> get movements  => List.unmodifiable(_movements);
+  // ── Public getters (filtered, read-only views) ───────────────────────────────
+  List<ItemModel>     get items    => _items.where((i) => !i.isDeleted).toList();
+  List<LocationModel> get locations=> _locations.where((l) => !l.isDeleted).toList();
+  List<StaffModel>    get staff    => List.unmodifiable(_staff);
   StaffModel?         get currentStaff => _currentStaff;
+  bool get isLoggedIn => _currentStaff != null;
 
-  bool get hasStaff     => _staff.isNotEmpty;
-  bool get isLoggedIn   => _currentStaff != null;
+  int get pendingSyncCount => _movements.where((m) => m.syncStatus == 'pending').length;
+  int get syncedCount      => _movements.where((m) => m.syncStatus == 'synced').length;
+  int get totalMovements   => _movements.length;
 
-  // ── Constructor — seed with default data ────────────────────────────────────
+  // Sorted newest first — avoids mutating internal list
+  List<MovementModel> get sortedMovements {
+    final list = List<MovementModel>.from(_movements);
+    list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return list;
+  }
+
+  // ── Constructor ───────────────────────────────────────────────────────────────
   AppDataProvider() {
     _seedData();
   }
 
+  // Safe notify — prevents calling after dispose
+  void _notify() {
+    if (!_disposed) notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+
+  // ─── Seed data ────────────────────────────────────────────────────────────────
   void _seedData() {
     final now = DateTime.now();
 
-    // Default items
-    _items.addAll([
-      ItemModel(id:_itemId++, name:'Rice',         unit:'kg',    createdAt:now, updatedAt:now),
-      ItemModel(id:_itemId++, name:'Sugar',        unit:'kg',    createdAt:now, updatedAt:now),
-      ItemModel(id:_itemId++, name:'Wheat flour',  unit:'kg',    createdAt:now, updatedAt:now),
-      ItemModel(id:_itemId++, name:'Mustard oil',  unit:'litre', createdAt:now, updatedAt:now),
-      ItemModel(id:_itemId++, name:'Dal',          unit:'kg',    createdAt:now, updatedAt:now),
-      ItemModel(id:_itemId++, name:'Salt',         unit:'kg',    createdAt:now, updatedAt:now),
-      ItemModel(id:_itemId++, name:'Ghee',         unit:'kg',    createdAt:now, updatedAt:now),
-      ItemModel(id:_itemId++, name:'Diesel',       unit:'litre', createdAt:now, updatedAt:now),
-    ]);
+    // Real products from spec
+    for (final name in [
+      '60*90 Dabangg',
+      '60*90 Jio Vip',
+      '90*100 Sonata White',
+      '90*100 Khubsurat Set',
+      '108*108 Flora Bedsheet',
+      '70*90 Metro',
+      '90*100 Metro',
+      '60*90 Metro',
+    ]) {
+      _items.add(ItemModel(
+        id: _itemId++, name: name, unit: 'pcs',
+        createdAt: now, updatedAt: now,
+      ));
+    }
 
-    // Default locations
-    _locations.addAll([
-      LocationModel(id:_locationId++, name:'Godown A',  type:'godown', createdAt:now, updatedAt:now),
-      LocationModel(id:_locationId++, name:'Godown B',  type:'godown', createdAt:now, updatedAt:now),
-      LocationModel(id:_locationId++, name:'Godown C',  type:'godown', createdAt:now, updatedAt:now),
-      LocationModel(id:_locationId++, name:'Shop',      type:'shop',   createdAt:now, updatedAt:now),
-      LocationModel(id:_locationId++, name:'Warehouse', type:'godown', createdAt:now, updatedAt:now),
-    ]);
+    // Locations
+    for (final entry in [
+      ('Godown A', 'godown'), ('Godown B', 'godown'),
+      ('Godown C', 'godown'), ('Shop', 'shop'),
+    ]) {
+      _locations.add(LocationModel(
+        id: _locationId++, name: entry.$1, type: entry.$2,
+        createdAt: now, updatedAt: now,
+      ));
+    }
 
-    // Default staff
-    _staff.addAll([
-      StaffModel(id:_staffId++, name:'Ramesh', pin:'1234', createdAt:now),
-      StaffModel(id:_staffId++, name:'Suresh', pin:'5678', createdAt:now),
-      StaffModel(id:_staffId++, name:'Dinesh', pin:'9012', createdAt:now),
-    ]);
+    // Staff
+    for (final entry in [
+      ('Ramesh', '1234'), ('Suresh', '5678'), ('Dinesh', '9012'),
+    ]) {
+      _staff.add(StaffModel(
+        id: _staffId++, name: entry.$1, pin: entry.$2, createdAt: now,
+      ));
+    }
 
-    // Seed some past movements so History and Stock screens are not empty
-    final movements = [
-      (itemId:1, fromId:1, toId:4, staffId:1, qty:50.0,  hoursAgo:2,  edited:false, editedBy:0,  remark:''),
-      (itemId:2, fromId:2, toId:1, staffId:2, qty:20.0,  hoursAgo:3,  edited:true,  editedBy:1,  remark:''),
-      (itemId:8, fromId:1, toId:4, staffId:3, qty:100.0, hoursAgo:5,  edited:false, editedBy:0,  remark:'Urgent transfer'),
-      (itemId:5, fromId:2, toId:4, staffId:1, qty:30.0,  hoursAgo:6,  edited:false, editedBy:0,  remark:''),
-      (itemId:4, fromId:1, toId:4, staffId:2, qty:40.0,  hoursAgo:26, edited:false, editedBy:0,  remark:''),
-      (itemId:7, fromId:2, toId:1, staffId:3, qty:15.0,  hoursAgo:28, edited:true,  editedBy:2,  remark:''),
-      (itemId:1, fromId:1, toId:2, staffId:1, qty:200.0, hoursAgo:30, edited:false, editedBy:0,  remark:'Monthly transfer'),
-      (itemId:2, fromId:2, toId:4, staffId:2, qty:50.0,  hoursAgo:50, edited:false, editedBy:0,  remark:''),
-      (itemId:8, fromId:1, toId:2, staffId:3, qty:200.0, hoursAgo:52, edited:false, editedBy:0,  remark:''),
-      (itemId:5, fromId:1, toId:4, staffId:1, qty:80.0,  hoursAgo:54, edited:true,  editedBy:3,  remark:'Corrected qty'),
+    // Seed movements for History + Stock to show real data
+    // itemId 1-8 match the products above, locationId 1-4
+    final seeds = [
+      (itemId: 1, from: 1, to: 4, staff: 1, qty: 100.0, hrs: 2,  edited: false, editedBy: 0, remark: ''),
+      (itemId: 2, from: 1, to: 4, staff: 2, qty: 50.0,  hrs: 3,  edited: false, editedBy: 0, remark: ''),
+      (itemId: 3, from: 2, to: 4, staff: 1, qty: 30.0,  hrs: 5,  edited: true,  editedBy: 2, remark: ''),
+      (itemId: 4, from: 1, to: 4, staff: 3, qty: 25.0,  hrs: 6,  edited: false, editedBy: 0, remark: ''),
+      (itemId: 5, from: 2, to: 4, staff: 2, qty: 60.0,  hrs: 26, edited: false, editedBy: 0, remark: ''),
+      (itemId: 6, from: 1, to: 2, staff: 1, qty: 40.0,  hrs: 28, edited: false, editedBy: 0, remark: 'Transfer to B'),
+      (itemId: 7, from: 2, to: 4, staff: 3, qty: 20.0,  hrs: 30, edited: true,  editedBy: 1, remark: ''),
+      (itemId: 8, from: 1, to: 4, staff: 2, qty: 35.0,  hrs: 50, edited: false, editedBy: 0, remark: ''),
+      (itemId: 1, from: 2, to: 1, staff: 1, qty: 200.0, hrs: 52, edited: false, editedBy: 0, remark: 'Restocking'),
+      (itemId: 3, from: 1, to: 4, staff: 3, qty: 15.0,  hrs: 54, edited: false, editedBy: 0, remark: ''),
     ];
 
-    for (final m in movements) {
+    for (final s in seeds) {
       _movements.add(MovementModel(
         id:             _movementId++,
-        itemId:         m.itemId,
-        fromLocationId: m.fromId,
-        toLocationId:   m.toId,
-        staffId:        m.staffId,
-        quantity:       m.qty,
-        createdAt:      now.subtract(Duration(hours: m.hoursAgo)),
-        edited:         m.edited,
-        editedBy:       m.edited ? m.editedBy : null,
-        editedAt:       m.edited ? now.subtract(Duration(hours: m.hoursAgo - 1)) : null,
-        remark:         m.remark.isEmpty ? null : m.remark,
+        itemId:         s.itemId,
+        fromLocationId: s.from,
+        toLocationId:   s.to,
+        staffId:        s.staff,
+        quantity:       s.qty,
+        createdAt:      now.subtract(Duration(hours: s.hrs)),
+        edited:         s.edited,
+        editedBy:       s.edited ? s.editedBy : null,
+        editedAt:       s.edited
+            ? now.subtract(Duration(hours: s.hrs - 1))
+            : null,
+        remark:         s.remark.isEmpty ? null : s.remark,
         syncStatus:     'pending',
       ));
     }
@@ -220,43 +243,70 @@ class AppDataProvider extends ChangeNotifier {
   // ITEM METHODS
   // ═══════════════════════════════════════════════════════════════════════════
 
-  // Add a new item
-  // TODO Phase 2: await DatabaseHelper.instance.insertItem(item)
-  void addItem({required String name, required String unit}) {
-    final now = DateTime.now();
+  // TODO Phase 2: await db.insertItem(...)
+  void addItem({
+    required String name,
+    required String unit,
+    int?    openingLocationId,
+    double? openingQty,
+  }) {
+    final now    = DateTime.now();
+    final itemId = _itemId++;
+
     _items.add(ItemModel(
-      id:        _itemId++,
-      name:      name,
-      unit:      unit,
-      createdAt: now,
-      updatedAt: now,
+      id: itemId, name: name, unit: unit,
+      createdAt: now, updatedAt: now,
     ));
-    notifyListeners();
+
+    // Create opening stock movement if provided
+    if (openingLocationId != null && openingQty != null && openingQty > 0) {
+      _movements.insert(0, MovementModel(
+        id:             _movementId++,
+        itemId:         itemId,
+        fromLocationId: -1, // -1 = external supplier
+        toLocationId:   openingLocationId,
+        staffId:        _currentStaff?.id ?? (_staff.isNotEmpty ? _staff.first.id : 1),
+        quantity:       openingQty,
+        createdAt:      now,
+        remark:         'Opening stock',
+        syncStatus:     'pending',
+      ));
+    }
+    _notify();
   }
 
-  // Edit an existing item
-  // TODO Phase 2: await DatabaseHelper.instance.updateItem(item)
+  // TODO Phase 2: await db.updateItem(...)
   void editItem({required int id, required String name, required String unit}) {
-    final item = _items.firstWhere((i) => i.id == id);
-    item.name      = name;
-    item.unit      = unit;
-    item.updatedAt = DateTime.now();
-    notifyListeners();
+    try {
+      final item     = _items.firstWhere((i) => i.id == id);
+      item.name      = name;
+      item.unit      = unit;
+      item.updatedAt = DateTime.now();
+      _notify();
+    } catch (e) {
+      debugPrint('editItem: item $id not found');
+    }
   }
 
-  // Soft delete — item stays in DB, is_deleted = true
-  // TODO Phase 2: await DatabaseHelper.instance.softDeleteItem(id)
+  // Soft delete — is_deleted = true, never removed from list
+  // TODO Phase 2: await db.softDeleteItem(...)
   void deleteItem(int id) {
-    final item = _items.firstWhere((i) => i.id == id);
-    item.isDeleted = true;
-    item.updatedAt = DateTime.now();
-    notifyListeners();
+    try {
+      final item     = _items.firstWhere((i) => i.id == id);
+      item.isDeleted = true;
+      item.updatedAt = DateTime.now();
+      _notify();
+    } catch (e) {
+      debugPrint('deleteItem: item $id not found');
+    }
   }
 
-  // Get item by ID (used internally)
   ItemModel? getItemById(int id) {
-    try { return _items.firstWhere((i) => i.id == id); }
-    catch (_) { return null; }
+    try {
+      return _items.firstWhere((i) => i.id == id);
+    } catch (_) {
+      return null;
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -266,33 +316,41 @@ class AppDataProvider extends ChangeNotifier {
   void addLocation({required String name, required String type}) {
     final now = DateTime.now();
     _locations.add(LocationModel(
-      id:        _locationId++,
-      name:      name,
-      type:      type,
-      createdAt: now,
-      updatedAt: now,
+      id: _locationId++, name: name, type: type,
+      createdAt: now, updatedAt: now,
     ));
-    notifyListeners();
+    _notify();
   }
 
   void editLocation({required int id, required String name, required String type}) {
-    final loc  = _locations.firstWhere((l) => l.id == id);
-    loc.name      = name;
-    loc.type      = type;
-    loc.updatedAt = DateTime.now();
-    notifyListeners();
+    try {
+      final loc     = _locations.firstWhere((l) => l.id == id);
+      loc.name      = name;
+      loc.type      = type;
+      loc.updatedAt = DateTime.now();
+      _notify();
+    } catch (e) {
+      debugPrint('editLocation: location $id not found');
+    }
   }
 
   void deleteLocation(int id) {
-    final loc  = _locations.firstWhere((l) => l.id == id);
-    loc.isDeleted = true;
-    loc.updatedAt = DateTime.now();
-    notifyListeners();
+    try {
+      final loc     = _locations.firstWhere((l) => l.id == id);
+      loc.isDeleted = true;
+      loc.updatedAt = DateTime.now();
+      _notify();
+    } catch (e) {
+      debugPrint('deleteLocation: location $id not found');
+    }
   }
 
   LocationModel? getLocationById(int id) {
-    try { return _locations.firstWhere((l) => l.id == id); }
-    catch (_) { return null; }
+    try {
+      return _locations.firstWhere((l) => l.id == id);
+    } catch (_) {
+      return null;
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -301,34 +359,35 @@ class AppDataProvider extends ChangeNotifier {
 
   void addStaff({required String name, required String pin}) {
     _staff.add(StaffModel(
-      id:        _staffId++,
-      name:      name,
-      pin:       pin,
+      id: _staffId++, name: name, pin: pin,
       createdAt: DateTime.now(),
     ));
-    notifyListeners();
+    _notify();
   }
 
   void editStaff({required int id, required String name, required String pin}) {
-    final s = _staff.firstWhere((s) => s.id == id);
-    s.name = name;
-    s.pin  = pin;
-    notifyListeners();
+    try {
+      final s = _staff.firstWhere((s) => s.id == id);
+      s.name  = name;
+      s.pin   = pin;
+      _notify();
+    } catch (e) {
+      debugPrint('editStaff: staff $id not found');
+    }
   }
 
   void deleteStaff(int id) {
     _staff.removeWhere((s) => s.id == id);
-    notifyListeners();
+    _notify();
   }
 
-  // Login — verifies staff name + PIN
-  // Returns true if login successful
+  // Returns true on success, false on wrong PIN
   bool login({required int staffId, required String pin}) {
     try {
       final s = _staff.firstWhere((s) => s.id == staffId);
       if (s.pin == pin) {
         _currentStaff = s;
-        notifyListeners();
+        _notify();
         return true;
       }
       return false;
@@ -339,15 +398,14 @@ class AppDataProvider extends ChangeNotifier {
 
   void logout() {
     _currentStaff = null;
-    notifyListeners();
+    _notify();
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // MOVEMENT METHODS
   // ═══════════════════════════════════════════════════════════════════════════
 
-  // Add a new movement — the core action of the app
-  // TODO Phase 2: await DatabaseHelper.instance.insertMovement(movement)
+  // TODO Phase 2: await db.insertMovement(...)
   void addMovement({
     required int    itemId,
     required int    fromLocationId,
@@ -356,7 +414,17 @@ class AppDataProvider extends ChangeNotifier {
     required int    staffId,
     String?         remark,
   }) {
-    _movements.insert(0, MovementModel(  // insert at top so newest is first
+    // Basic validation
+    if (quantity <= 0) {
+      debugPrint('addMovement: invalid quantity $quantity');
+      return;
+    }
+    if (fromLocationId == toLocationId) {
+      debugPrint('addMovement: from == to, rejected');
+      return;
+    }
+
+    _movements.insert(0, MovementModel(
       id:             _movementId++,
       itemId:         itemId,
       fromLocationId: fromLocationId,
@@ -367,32 +435,26 @@ class AppDataProvider extends ChangeNotifier {
       remark:         remark,
       syncStatus:     'pending',
     ));
-    notifyListeners(); // all screens listening will rebuild automatically
-  }
-
-  // Get movements sorted newest first
-  List<MovementModel> get sortedMovements {
-    final list = List<MovementModel>.from(_movements);
-    list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    return list;
+    _notify();
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // STOCK CALCULATION  (spec section 8: Stock = Incoming - Outgoing)
+  // STOCK CALCULATION  — spec section 8: Balance = Incoming − Outgoing
   // ═══════════════════════════════════════════════════════════════════════════
 
-  // Returns stock balance for every item at every location
-  // Only returns entries where balance > 0
   List<StockBalance> getStock() {
-    final result = <StockBalance>[];
+    final activeLocations = locations; // already filters isDeleted
+    final activeItems     = items;
+    final result          = <StockBalance>[];
 
-    for (final loc in locations) {
-      for (final item in items) {
+    for (final loc in activeLocations) {
+      for (final item in activeItems) {
         double incoming = 0;
         double outgoing = 0;
 
         for (final m in _movements) {
           if (m.itemId != item.id) continue;
+          // fromLocationId = -1 (supplier) counts as incoming to toLocation only
           if (m.toLocationId   == loc.id) incoming += m.quantity;
           if (m.fromLocationId == loc.id) outgoing += m.quantity;
         }
@@ -410,33 +472,23 @@ class AppDataProvider extends ChangeNotifier {
     return result;
   }
 
-  // Stock for one specific location
   List<StockBalance> getStockForLocation(int locationId) =>
       getStock().where((s) => s.location.id == locationId).toList();
 
-  // Stock for one specific item across all locations
-  List<StockBalance> getStockForItem(int itemId) =>
-      getStock().where((s) => s.item.id == itemId).toList();
-
-  // Total stock of one item across all locations
   double totalStockForItem(int itemId) =>
-      getStockForItem(itemId).fold(0, (sum, s) => sum + s.balance);
+      getStock()
+          .where((s) => s.item.id == itemId)
+          .fold(0, (sum, s) => sum + s.balance);
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // SYNC HELPERS
+  // SYNC
   // ═══════════════════════════════════════════════════════════════════════════
 
-  int get pendingSyncCount =>
-      _movements.where((m) => m.syncStatus == 'pending').length;
-
-  int get syncedCount =>
-      _movements.where((m) => m.syncStatus == 'synced').length;
-
-  // Mark all pending as synced (called by sync service in Phase 2)
+  // TODO Phase 2: push pending to Supabase, then mark synced
   void markAllSynced() {
     for (final m in _movements) {
       m.syncStatus = 'synced';
     }
-    notifyListeners();
+    _notify();
   }
 }
