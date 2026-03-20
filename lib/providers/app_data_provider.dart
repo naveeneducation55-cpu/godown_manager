@@ -15,9 +15,9 @@
 //   • _disposed guard prevents notify after widget tree teardown
 //   • Single isolate — no parallel mutation possible
 // ─────────────────────────────────────────────────────────────────────────────
-import '../database/database_helper.dart';
-import 'package:flutter/foundation.dart';
 
+import 'package:flutter/foundation.dart';
+import '../database/database_helper.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MODELS  (unchanged from Phase 1 — screens need no changes)
@@ -129,15 +129,15 @@ class StaffModel {
 class MovementModel {
   final int      id;
   final int      itemId;
-  final int      fromLocationId;
-  final int      toLocationId;
+  int            fromLocationId;   // editable
+  int            toLocationId;     // editable
   final int      staffId;
-  final double   quantity;
+  double         quantity;         // editable
   final DateTime createdAt;
   bool           edited;
   int?           editedBy;
   DateTime?      editedAt;
-  String?        remark;
+  String?        remark;           // editable
   String         syncStatus;
 
   MovementModel({
@@ -627,6 +627,63 @@ class AppDataProvider extends ChangeNotifier {
       _notify();
     } catch (e) {
       debugPrint('markAllSynced: $e');
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // EDIT MOVEMENT  (spec section 7)
+  // Editable: qty, remark, from_location, to_location
+  // Never changes: item_id
+  // Sets: edited=true, edited_by=currentStaff.id, updated_at=now
+  // Returns true on success, false on failure
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  Future<bool> editMovement({
+    required int    movementId,
+    required double quantity,
+    required int    fromLocationId,
+    required int    toLocationId,
+    String?         remark,
+  }) async {
+    if (quantity <= 0) {
+      debugPrint('editMovement: invalid quantity');
+      return false;
+    }
+    if (fromLocationId == toLocationId) {
+      debugPrint('editMovement: from == to');
+      return false;
+    }
+    try {
+      final now     = DateTime.now();
+      final staffId = _currentStaff?.id;
+
+      await DatabaseHelper.instance.updateMovement(movementId, {
+        'quantity':      quantity,
+        'from_location': fromLocationId,
+        'to_location':   toLocationId,
+        'remark':        remark,
+        'edited':        1,
+        'edited_by':     staffId,
+        'updated_at':    now.toIso8601String(),
+        'sync_status':   'pending',
+      });
+
+      // Update in-memory cache
+      final m = _movements.firstWhere((m) => m.id == movementId);
+      m.quantity       = quantity;
+      m.fromLocationId = fromLocationId;
+      m.toLocationId   = toLocationId;
+      m.remark         = remark;
+      m.edited         = true;
+      m.editedBy       = staffId;
+      m.editedAt       = now;
+      m.syncStatus     = 'pending';
+
+      _notify();
+      return true;
+    } catch (e) {
+      debugPrint('editMovement($movementId): $e');
+      return false;
     }
   }
 }

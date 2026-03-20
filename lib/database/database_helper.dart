@@ -178,10 +178,9 @@ class DatabaseHelper {
 
     // Staff — first is admin
     for (final s in [
-      ('RAI ', '1234', 'admin'),
-      ('RAM ', '5678', 'staff'),
-      ('HARI', '9012', 'staff'),
-      ('PRADEEP','2002','staff'),
+      ('Ramesh', '1234', 'admin'),
+      ('Suresh', '5678', 'staff'),
+      ('Dinesh', '9012', 'staff'),
     ]) {
       await txn.insert(tStaff, {
         'staff_name': s.$1,
@@ -193,7 +192,7 @@ class DatabaseHelper {
 
     // Sample movements (so stock/history are not empty on first launch)
     final movements = [
-      (itemId: 1, from: 1, to: 4, staff: 1, qty: 10.0, hrsAgo: 2,  remark: ''),
+      (itemId: 1, from: 1, to: 4, staff: 1, qty: 100.0, hrsAgo: 2,  remark: ''),
       (itemId: 2, from: 1, to: 4, staff: 2, qty: 50.0,  hrsAgo: 3,  remark: ''),
       (itemId: 3, from: 2, to: 4, staff: 1, qty: 30.0,  hrsAgo: 5,  remark: ''),
       (itemId: 4, from: 1, to: 4, staff: 3, qty: 25.0,  hrsAgo: 6,  remark: ''),
@@ -329,9 +328,38 @@ class DatabaseHelper {
   // MOVEMENTS CRUD
   // ═══════════════════════════════════════════════════════════════════════════
 
-  Future<List<Map<String, dynamic>>> getMovements() async {
+  // P4: Paginated movements — avoids loading 10,000 rows on startup
+  // Default: latest 200 records — enough for history screen
+  // Pass offset to load more (infinite scroll in Phase 3)
+  Future<List<Map<String, dynamic>>> getMovements({
+    int limit  = 200,
+    int offset = 0,
+  }) async {
     final d = await db;
-    return d.query(tMovements, orderBy: 'created_at DESC');
+    return d.query(
+      tMovements,
+      orderBy:  'created_at DESC',
+      limit:    limit,
+      offset:   offset,
+    );
+  }
+
+  // Total movement count — for sync screen stats
+  Future<int> getMovementCount() async {
+    final d      = await db;
+    final result = await d.rawQuery(
+      'SELECT COUNT(*) AS cnt FROM $tMovements'
+    );
+    return (result.first['cnt'] as int?) ?? 0;
+  }
+
+  // Pending sync count — for home screen badge
+  Future<int> getPendingCount() async {
+    final d      = await db;
+    final result = await d.rawQuery(
+      "SELECT COUNT(*) AS cnt FROM $tMovements WHERE sync_status = 'pending'"
+    );
+    return (result.first['cnt'] as int?) ?? 0;
   }
 
   Future<int> insertMovement(Map<String, dynamic> data) async {

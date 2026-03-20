@@ -283,7 +283,14 @@ class _LogRow extends StatelessWidget {
         ? 'Supplier'
         : (from?.name ?? '—');
 
-    return Container(
+    // Supplier movements (-1) cannot be edited — no route to change
+    final canEdit = m.fromLocationId != -1;
+
+    return GestureDetector(
+      onTap: canEdit
+          ? () => _showEditSheet(context, m, data)
+          : null,
+      child: Container(
       decoration: isLast
           ? null
           : BoxDecoration(
@@ -359,7 +366,8 @@ class _LogRow extends StatelessWidget {
           ],
         ],
       ),
-    );
+    ), // Container
+    ); // GestureDetector
   }
 
   static String _fmtTime(DateTime d) {
@@ -367,6 +375,272 @@ class _LogRow extends StatelessWidget {
     final min  = d.minute.toString().padLeft(2, '0');
     final ampm = d.hour >= 12 ? 'PM' : 'AM';
     return '$h:$min $ampm';
+  }
+}
+
+// ─── Edit movement sheet ─────────────────────────────────────────────────────
+void _showEditSheet(
+  BuildContext      context,
+  MovementModel     movement,
+  AppDataProvider   data,
+) {
+  showModalBottomSheet(
+    context:            context,
+    isScrollControlled: true,
+    backgroundColor:    Colors.transparent,
+    builder: (_) => _EditSheet(movement: movement, data: data),
+  );
+}
+
+class _EditSheet extends StatefulWidget {
+  final MovementModel   movement;
+  final AppDataProvider data;
+  const _EditSheet({required this.movement, required this.data});
+  @override
+  State<_EditSheet> createState() => _EditSheetState();
+}
+
+class _EditSheetState extends State<_EditSheet> {
+  late final TextEditingController _qtyCtrl;
+  late final TextEditingController _remarkCtrl;
+  final _formKey = GlobalKey<FormState>();
+  LocationModel? _fromLoc;
+  LocationModel? _toLoc;
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final m = widget.movement;
+    _qtyCtrl    = TextEditingController(
+        text: m.quantity == m.quantity.truncateToDouble()
+            ? m.quantity.toInt().toString()
+            : m.quantity.toStringAsFixed(1));
+    _remarkCtrl = TextEditingController(text: m.remark ?? '');
+    // Pre-select current from/to
+    _fromLoc = widget.data.getLocationById(m.fromLocationId);
+    _toLoc   = widget.data.getLocationById(m.toLocationId);
+  }
+
+  @override
+  void dispose() {
+    _qtyCtrl.dispose();
+    _remarkCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    if (_fromLoc == null) { showError(context, 'Select From location'); return; }
+    if (_toLoc   == null) { showError(context, 'Select To location');   return; }
+    if (_fromLoc!.id == _toLoc!.id) {
+      showError(context, 'From and To cannot be the same');
+      return;
+    }
+
+    setState(() => _isSaving = true);
+
+    final qty = double.tryParse(_qtyCtrl.text.trim()) ?? 0;
+    final ok  = await widget.data.editMovement(
+      movementId:     widget.movement.id,
+      quantity:       qty,
+      fromLocationId: _fromLoc!.id,
+      toLocationId:   _toLoc!.id,
+      remark:         _remarkCtrl.text.trim().isEmpty
+          ? null
+          : _remarkCtrl.text.trim(),
+    );
+
+    if (!mounted) return;
+    setState(() => _isSaving = false);
+
+    if (ok) {
+      showSuccess(context, 'Movement updated');
+      Navigator.of(context).pop();
+    } else {
+      showError(context, 'Failed to update. Try again.');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t         = context.appTheme;
+    final bot       = MediaQuery.of(context).viewInsets.bottom;
+    final locations = widget.data.locations;
+    final item      = widget.data.getItemById(widget.movement.itemId);
+
+    return Container(
+      decoration: BoxDecoration(
+        color:        t.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        border:       Border.all(color: t.border, width: 0.8),
+      ),
+      padding: EdgeInsets.fromLTRB(16, 12, 16, 16 + bot),
+      child: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize:       MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+
+            // Handle
+            Center(child: Container(
+              width: 40, height: 4,
+              decoration: BoxDecoration(
+                color: t.border,
+                borderRadius: BorderRadius.circular(99),
+              ),
+            )),
+            const SizedBox(height: AppSpacing.md),
+
+            // Title + item name (fixed — cannot change)
+            Row(children: [
+              Expanded(child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Edit Movement',
+                      style: AppFonts.heading(color: t.text)),
+                  const SizedBox(height: 2),
+                  // Item is fixed — shown as read-only label
+                  Row(children: [
+                    Icon(Icons.inventory_2_outlined, size: 12, color: t.text3),
+                    const SizedBox(width: 4),
+                    Text(item?.name ?? '—',
+                        style: AppFonts.monoStyle(size: 11, color: t.text3)),
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: t.warnBg,
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                      child: Text('item cannot change',
+                          style: AppFonts.monoStyle(size: 9, color: t.warnFg)),
+                    ),
+                  ]),
+                ],
+              )),
+              GestureDetector(
+                onTap: () => Navigator.of(context).pop(),
+                child: Icon(Icons.close_rounded, size: 20, color: t.text3),
+              ),
+            ]),
+            const SizedBox(height: AppSpacing.lg),
+
+            // Quantity
+            TextFormField(
+              controller:   _qtyCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              style: AppFonts.monoStyle(size: 16, color: t.text, weight: FontWeight.w600),
+              decoration: InputDecoration(
+                labelText:  'Quantity',
+                prefixIcon: Icon(Icons.scale_outlined, size: 18, color: t.text3),
+                suffix: item != null
+                    ? Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: t.primary.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(item.unit,
+                            style: AppFonts.monoStyle(size: 11, color: t.primary)),
+                      )
+                    : null,
+              ),
+              validator: (v) {
+                if (v == null || v.trim().isEmpty) return 'Required';
+                final qty = double.tryParse(v.trim());
+                if (qty == null || qty <= 0) return 'Must be greater than 0';
+                return null;
+              },
+            ),
+            const SizedBox(height: AppSpacing.md),
+
+            // From location
+            DropdownButtonFormField<LocationModel>(
+              value:         _fromLoc,
+              dropdownColor: t.surface,
+              style:         AppFonts.body(color: t.text),
+              decoration: InputDecoration(
+                labelText:  'From',
+                prefixIcon: Icon(Icons.output_rounded, size: 18, color: t.text3),
+              ),
+              icon: Icon(Icons.keyboard_arrow_down_rounded, color: t.text3),
+              items: locations
+                  .where((l) => _toLoc == null || l.id != _toLoc!.id)
+                  .map((l) => DropdownMenuItem(
+                    value: l,
+                    child: Row(children: [
+                      Icon(l.type == 'shop'
+                          ? Icons.storefront_outlined
+                          : Icons.warehouse_outlined,
+                          size: 14, color: t.text3),
+                      const SizedBox(width: 8),
+                      Text(l.name, style: AppFonts.body(color: t.text)),
+                    ]),
+                  )).toList(),
+              onChanged: (v) => setState(() => _fromLoc = v),
+              validator: (_) => _fromLoc == null ? 'Required' : null,
+            ),
+            const SizedBox(height: AppSpacing.sm),
+
+            // To location
+            DropdownButtonFormField<LocationModel>(
+              value:         _toLoc,
+              dropdownColor: t.surface,
+              style:         AppFonts.body(color: t.text),
+              decoration: InputDecoration(
+                labelText:  'To',
+                prefixIcon: Icon(Icons.input_rounded, size: 18, color: t.text3),
+              ),
+              icon: Icon(Icons.keyboard_arrow_down_rounded, color: t.text3),
+              items: locations
+                  .where((l) => _fromLoc == null || l.id != _fromLoc!.id)
+                  .map((l) => DropdownMenuItem(
+                    value: l,
+                    child: Row(children: [
+                      Icon(l.type == 'shop'
+                          ? Icons.storefront_outlined
+                          : Icons.warehouse_outlined,
+                          size: 14, color: t.text3),
+                      const SizedBox(width: 8),
+                      Text(l.name, style: AppFonts.body(color: t.text)),
+                    ]),
+                  )).toList(),
+              onChanged: (v) => setState(() => _toLoc = v),
+              validator: (_) => _toLoc == null ? 'Required' : null,
+            ),
+            const SizedBox(height: AppSpacing.md),
+
+            // Remark
+            TextFormField(
+              controller: _remarkCtrl,
+              maxLines:   2,
+              maxLength:  150,
+              style:      AppFonts.body(color: t.text),
+              decoration: InputDecoration(
+                labelText:    'Remark (optional)',
+                prefixIcon:   Padding(
+                  padding: const EdgeInsets.only(bottom: 26),
+                  child: Icon(Icons.notes_rounded, size: 18, color: t.text3),
+                ),
+                counterStyle:       AppFonts.label(color: t.text3),
+                alignLabelWithHint: true,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.md),
+
+            // Save
+            PrimaryButton(
+              label:   'Save Changes',
+              icon:    Icons.check_rounded,
+              onTap:   _submit,
+              loading: _isSaving,
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
