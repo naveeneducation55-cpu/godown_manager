@@ -451,7 +451,10 @@ class AppThemeExtension extends ThemeExtension<AppThemeExtension> {
 }
 
 // ─── Convenience extension — context.appTheme ─────────────────────────────────
+// Uses ?? fallback instead of ! to prevent crash during route transitions
+// when the theme extension may not yet be available on the new context.
 extension AppThemeContext on BuildContext {
   AppThemeExtension get appTheme =>
-      Theme.of(this).extension<AppThemeExtension>()!;
+      Theme.of(this).extension<AppThemeExtension>() ??
+      AppThemeExtension.light();
 }

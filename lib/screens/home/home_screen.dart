@@ -14,7 +14,7 @@
 //   │  [ 🕘 History     ]  │
 //   │  [ ⚙  Manage Data ]  │
 //   └──────────────────────┘
-//
+//_
 // Spec rules applied:
 //   • padding: 12px
 //   • border-radius: 12px
@@ -28,11 +28,54 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../app_theme.dart';
-import '../../router.dart';
 import '../../theme_provider.dart';
+import '../../router.dart';
+import '../login/login_screen.dart';
+import '../../providers/app_data_provider.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
+
+  // Confirm logout dialog
+  Future<void> _confirmLogout(BuildContext context) async {
+    final t = context.appTheme;
+    final data = context.read<AppDataProvider>();
+    if (data.currentStaff == null) {
+      Navigator.pushNamed(context, AppRouter.login);
+      return;
+    }
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: t.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppSpacing.radius),
+          side: BorderSide(color: t.border, width: 0.8),
+        ),
+        title: Text('Log out?', style: AppFonts.heading(color: t.text).copyWith(fontSize: 16)),
+        content: Text(
+          'This will remove ${data.currentStaff!.name} from this device.\n\nAnother staff member can then log in.',
+          style: AppFonts.body(color: t.text2),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text('Cancel', style: AppFonts.label(color: t.text2)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text('Log out', style: AppFonts.label(color: t.error)
+                .copyWith(fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+    if (confirm == true && context.mounted) {
+      await clearSavedStaffId();
+      context.read<AppDataProvider>().logout();
+      Navigator.of(context).pushReplacementNamed(AppRouter.login);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -89,7 +132,39 @@ class HomeScreen extends StatelessWidget {
             onPressed: theme.toggle,
             tooltip:   theme.isDark ? 'Light mode' : 'Dark mode',
           ),
-          const SizedBox(width: AppSpacing.xs),
+          // Staff badge — tap to logout
+Consumer<AppDataProvider>(
+  builder: (ctx, data, _) => GestureDetector(
+    onTap: () => _confirmLogout(ctx),
+    child: Container(
+      margin: const EdgeInsets.only(right: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: t.primary.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: t.primary.withValues(alpha: 0.3), width: 0.8),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Text(
+          data.currentStaff?.name ?? 'Login',
+          style: AppFonts.monoStyle(size: 11, color: t.primary),
+        ),
+        if (data.isAdmin) ...[
+          const SizedBox(width: 4),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+            decoration: BoxDecoration(
+              color: t.successBg,
+              borderRadius: BorderRadius.circular(3),
+            ),
+            child: Text('admin',
+              style: AppFonts.monoStyle(size: 9, color: t.success)),
+          ),
+        ],
+      ]),
+    ),
+  ),
+),
         ],
       ),
 
@@ -159,7 +234,7 @@ class HomeScreen extends StatelessWidget {
                   const SizedBox(height: AppSpacing.xl),
 
                   // ── Sync status row ───────────────────────────────────────
-                  _SyncStatusRow(),
+                  _SyncStatusRow(pending: context.watch<AppDataProvider>().pendingSyncCount),
                   const SizedBox(height: AppSpacing.lg),
 
                 ],
@@ -400,6 +475,8 @@ class _ActionButton extends StatelessWidget {
 // Spec: "Sync in background", "Offline-first"
 // ─────────────────────────────────────────────────────────────────────────────
 class _SyncStatusRow extends StatelessWidget {
+  final int pending;
+  const _SyncStatusRow({required this.pending});
   @override
   Widget build(BuildContext context) {
     final t = context.appTheme;

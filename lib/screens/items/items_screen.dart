@@ -128,6 +128,7 @@ class _ItemsTabState extends State<_ItemsTab> {
   @override
   Widget build(BuildContext context) {
     final data     = context.watch<AppDataProvider>();
+    final isAdmin = data.currentStaff?.role == 'admin';
     final filtered = data.items.where((i) => _search.isEmpty ||
         i.name.toLowerCase().contains(_search.toLowerCase())).toList();
 
@@ -136,6 +137,11 @@ class _ItemsTabState extends State<_ItemsTab> {
         ctrl:      _ctrl,
         onChanged: (v) => setState(() => _search = v),
         onAdd:     () => _openAdd(context),
+      ),
+      // Role info banner
+      _RoleBanner(
+        isAdmin:    isAdmin,
+        staffNote:  'You can add items. Only admin can edit or delete.',
       ),
       Expanded(
         child: filtered.isEmpty
@@ -148,15 +154,17 @@ class _ItemsTabState extends State<_ItemsTab> {
                 onAction:    _search.isEmpty ? () => _openAdd(context) : null,
               )
             : ListView.separated(
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 100),
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 100),
                 itemCount: filtered.length,
                 separatorBuilder: (_, __) =>
                     const SizedBox(height: AppSpacing.sm),
                 itemBuilder: (_, i) => _DataRow(
-                  avatar:   filtered[i].name[0].toUpperCase(),
-                  title:    filtered[i].name,
-                  meta:     filtered[i].unit,
-                  date:     filtered[i].createdAt,
+                  avatar:    filtered[i].name[0].toUpperCase(),
+                  title:     filtered[i].name,
+                  meta:      filtered[i].unit,
+                  date:      filtered[i].createdAt,
+                  // Edit + delete only for admin
+                  showActions: isAdmin,
                   onEdit:   () => _openEdit(context, filtered[i]),
                   onDelete: () => _delete(context, filtered[i]),
                 ),
@@ -433,14 +441,25 @@ class _GodownsTabState extends State<_GodownsTab> {
   @override
   Widget build(BuildContext context) {
     final data     = context.watch<AppDataProvider>();
+    final isAdmin  = data.isAdmin;
     final filtered = data.locations.where((l) => _search.isEmpty ||
         l.name.toLowerCase().contains(_search.toLowerCase())).toList();
 
     return Column(children: [
-      _SearchBar(
-        ctrl:      _ctrl,
-        onChanged: (v) => setState(() => _search = v),
-        onAdd:     () => _openAdd(context),
+      // Only admin sees the add button
+      isAdmin
+          ? _SearchBar(
+              ctrl:      _ctrl,
+              onChanged: (v) => setState(() => _search = v),
+              onAdd:     () => _openAdd(context),
+            )
+          : _SearchBarNoAdd(
+              ctrl:      _ctrl,
+              onChanged: (v) => setState(() => _search = v),
+            ),
+      _RoleBanner(
+        isAdmin:   isAdmin,
+        staffNote: 'Only admin can add, edit or delete locations.',
       ),
       Expanded(
         child: filtered.isEmpty
@@ -451,18 +470,19 @@ class _GodownsTabState extends State<_GodownsTab> {
                     : 'No locations match "$_search"',
               )
             : ListView.separated(
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 100),
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 100),
                 itemCount: filtered.length,
                 separatorBuilder: (_, __) =>
                     const SizedBox(height: AppSpacing.sm),
                 itemBuilder: (_, i) => _DataRow(
-                  avatar:    filtered[i].type == 'shop' ? 'S' : 'G',
-                  avatarAlt: filtered[i].type == 'shop',
-                  title:     filtered[i].name,
-                  meta:      filtered[i].type,
-                  date:      filtered[i].createdAt,
-                  onEdit:    () => _openEdit(context, filtered[i]),
-                  onDelete:  () => _delete(context, filtered[i]),
+                  avatar:      filtered[i].type == 'shop' ? 'S' : 'G',
+                  avatarAlt:   filtered[i].type == 'shop',
+                  title:       filtered[i].name,
+                  meta:        filtered[i].type,
+                  date:        filtered[i].createdAt,
+                  showActions: isAdmin,
+                  onEdit:      () => _openEdit(context, filtered[i]),
+                  onDelete:    () => _delete(context, filtered[i]),
                 ),
               ),
       ),
@@ -639,15 +659,15 @@ class _StaffTabState extends State<_StaffTab> {
   void _openAdd(BuildContext ctx) => _showStaffSheet(
     context:  ctx,
     existing: null,
-    onSave: (n, p) =>
-        ctx.read<AppDataProvider>().addStaff(name: n, pin: p),
+    onSave: (n, p, r) =>
+        ctx.read<AppDataProvider>().addStaff(name: n, pin: p, role: r),
   );
 
   void _openEdit(BuildContext ctx, StaffModel s) => _showStaffSheet(
     context:  ctx,
     existing: s,
-    onSave: (n, p) =>
-        ctx.read<AppDataProvider>().editStaff(id: s.id, name: n, pin: p),
+    onSave: (n, p, r) =>
+        ctx.read<AppDataProvider>().editStaff(id: s.id, name: n, pin: p, role: r),
   );
 
   Future<void> _delete(BuildContext ctx, StaffModel s) async {
@@ -660,14 +680,24 @@ class _StaffTabState extends State<_StaffTab> {
   @override
   Widget build(BuildContext context) {
     final data     = context.watch<AppDataProvider>();
+    final isAdmin  = data.isAdmin;
     final filtered = data.staff.where((s) => _search.isEmpty ||
         s.name.toLowerCase().contains(_search.toLowerCase())).toList();
 
     return Column(children: [
-      _SearchBar(
-        ctrl:      _ctrl,
-        onChanged: (v) => setState(() => _search = v),
-        onAdd:     () => _openAdd(context),
+      isAdmin
+          ? _SearchBar(
+              ctrl:      _ctrl,
+              onChanged: (v) => setState(() => _search = v),
+              onAdd:     () => _openAdd(context),
+            )
+          : _SearchBarNoAdd(
+              ctrl:      _ctrl,
+              onChanged: (v) => setState(() => _search = v),
+            ),
+      _RoleBanner(
+        isAdmin:   isAdmin,
+        staffNote: 'Only admin can add or edit staff members.',
       ),
       Expanded(
         child: filtered.isEmpty
@@ -678,17 +708,19 @@ class _StaffTabState extends State<_StaffTab> {
                     : 'No staff match "$_search"',
               )
             : ListView.separated(
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 100),
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 100),
                 itemCount: filtered.length,
                 separatorBuilder: (_, __) =>
                     const SizedBox(height: AppSpacing.sm),
                 itemBuilder: (_, i) => _DataRow(
-                  avatar:   filtered[i].name[0].toUpperCase(),
-                  title:    filtered[i].name,
-                  meta:     '●●●●',
-                  date:     filtered[i].createdAt,
-                  onEdit:   () => _openEdit(context, filtered[i]),
-                  onDelete: () => _delete(context, filtered[i]),
+                  avatar:      filtered[i].name[0].toUpperCase(),
+                  title:       filtered[i].name,
+                  // Show role badge instead of PIN for clarity
+                  meta:        filtered[i].role,
+                  date:        filtered[i].createdAt,
+                  showActions: isAdmin,
+                  onEdit:      () => _openEdit(context, filtered[i]),
+                  onDelete:    () => _delete(context, filtered[i]),
                 ),
               ),
       ),
@@ -699,7 +731,7 @@ class _StaffTabState extends State<_StaffTab> {
 void _showStaffSheet({
   required BuildContext context,
   required StaffModel?  existing,
-  required void Function(String, String) onSave,
+  required void Function(String, String, String) onSave,
 }) {
   showModalBottomSheet(
     context:            context,
@@ -711,7 +743,7 @@ void _showStaffSheet({
 
 class _StaffSheet extends StatefulWidget {
   final StaffModel? existing;
-  final void Function(String, String) onSave;
+  final void Function(String name, String pin, String role) onSave;
   const _StaffSheet({required this.existing, required this.onSave});
   @override
   State<_StaffSheet> createState() => _StaffSheetState();
@@ -722,6 +754,7 @@ class _StaffSheetState extends State<_StaffSheet> {
   final _pinCtrl  = TextEditingController();
   final _formKey  = GlobalKey<FormState>();
   bool  _showPin  = false;
+  String _role    = 'staff';
   bool get _isEdit => widget.existing != null;
 
   @override
@@ -730,6 +763,7 @@ class _StaffSheetState extends State<_StaffSheet> {
     if (_isEdit) {
       _nameCtrl.text = widget.existing!.name;
       _pinCtrl.text  = widget.existing!.pin;
+      _role          = widget.existing!.role;
     }
   }
 
@@ -742,7 +776,7 @@ class _StaffSheetState extends State<_StaffSheet> {
 
   void _submit() {
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    widget.onSave(_nameCtrl.text.trim(), _pinCtrl.text.trim());
+    widget.onSave(_nameCtrl.text.trim(), _pinCtrl.text.trim(), _role);
     Navigator.of(context).pop();
   }
 
@@ -799,6 +833,27 @@ class _StaffSheetState extends State<_StaffSheet> {
               validator: (v) => (v == null || v.trim().length != 4)
                   ? 'PIN must be exactly 4 digits' : null,
             ),
+            const SizedBox(height: AppSpacing.md),
+
+            // Role selector
+            Text('Role', style: AppFonts.label(color: t.text3)),
+            const SizedBox(height: 6),
+            Row(children: [
+              _TypeChip(
+                label:    'Staff',
+                icon:     Icons.person_outline_rounded,
+                selected: _role == 'staff',
+                onTap:    () => setState(() => _role = 'staff'),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              _TypeChip(
+                label:    'Admin',
+                icon:     Icons.admin_panel_settings_outlined,
+                selected: _role == 'admin',
+                onTap:    () => setState(() => _role = 'admin'),
+              ),
+            ]),
+
             const SizedBox(height: AppSpacing.xl),
             PrimaryButton(
               label: _isEdit ? 'Update Staff' : 'Add Staff',
@@ -824,6 +879,7 @@ class _DataRow extends StatelessWidget {
   final VoidCallback onEdit;
   final VoidCallback onDelete;
   final bool         avatarAlt;
+  final bool         showActions; // false = staff view, hides edit/delete
 
   const _DataRow({
     required this.avatar,
@@ -832,7 +888,8 @@ class _DataRow extends StatelessWidget {
     required this.date,
     required this.onEdit,
     required this.onDelete,
-    this.avatarAlt = false,
+    this.avatarAlt   = false,
+    this.showActions = true,
   });
 
   @override
@@ -888,18 +945,19 @@ class _DataRow extends StatelessWidget {
             ],
           ),
         ),
-        Row(mainAxisSize: MainAxisSize.min, children: [
-          ActionButton(
-              label: 'edit',
-              icon:  Icons.edit_outlined,
-              onTap: onEdit),
-          const SizedBox(width: AppSpacing.xs + 2),
-          ActionButton(
-              label:  'delete',
-              icon:   Icons.delete_outline_rounded,
-              onTap:  onDelete,
-              danger: true),
-        ]),
+        if (showActions)
+          Row(mainAxisSize: MainAxisSize.min, children: [
+            ActionButton(
+                label: 'edit',
+                icon:  Icons.edit_outlined,
+                onTap: onEdit),
+            const SizedBox(width: AppSpacing.xs + 2),
+            ActionButton(
+                label:  'delete',
+                icon:   Icons.delete_outline_rounded,
+                onTap:  onDelete,
+                danger: true),
+          ]),
       ]),
     );
   }
@@ -908,6 +966,96 @@ class _DataRow extends StatelessWidget {
     const mo = ['Jan','Feb','Mar','Apr','May','Jun',
                  'Jul','Aug','Sep','Oct','Nov','Dec'];
     return '${d.day} ${mo[d.month - 1]} ${d.year}';
+  }
+}
+
+// Role info banner shown at top of each tab
+class _RoleBanner extends StatelessWidget {
+  final bool   isAdmin;
+  final String staffNote;
+  const _RoleBanner({
+    required this.isAdmin,
+    required this.staffNote,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.appTheme;
+    if (isAdmin) {
+      // Admin sees a small green "Admin access" badge
+      return Container(
+        margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+        padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.md, vertical: AppSpacing.xs + 2),
+        decoration: BoxDecoration(
+          color:        t.successBg,
+          borderRadius: BorderRadius.circular(AppSpacing.radiusXs),
+          border:       Border.all(color: t.success.withOpacity(0.3), width: 0.8),
+        ),
+        child: Row(children: [
+          Icon(Icons.admin_panel_settings_outlined,
+              size: 13, color: t.success),
+          const SizedBox(width: 6),
+          Text(
+            'Admin access — full control',
+            style: AppFonts.monoStyle(size: 11, color: t.success),
+          ),
+        ]),
+      );
+    }
+    // Staff sees a muted info note
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.md, vertical: AppSpacing.xs + 2),
+      decoration: BoxDecoration(
+        color:        t.infoBg,
+        borderRadius: BorderRadius.circular(AppSpacing.radiusXs),
+        border:       Border.all(color: t.infoFg.withOpacity(0.2), width: 0.8),
+      ),
+      child: Row(children: [
+        Icon(Icons.info_outline_rounded, size: 13, color: t.infoFg),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            staffNote,
+            style: AppFonts.monoStyle(size: 11, color: t.infoFg),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+// Search bar without add button — shown to staff on restricted tabs
+class _SearchBarNoAdd extends StatelessWidget {
+  final TextEditingController ctrl;
+  final ValueChanged<String>  onChanged;
+  const _SearchBarNoAdd({required this.ctrl, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.appTheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      child: TextField(
+        controller: ctrl,
+        onChanged:  onChanged,
+        style:      AppFonts.body(color: t.text),
+        decoration: InputDecoration(
+          hintText:   'Search...',
+          prefixIcon: Icon(Icons.search_rounded, size: 18, color: t.text3),
+          suffixIcon: ctrl.text.isNotEmpty
+              ? IconButton(
+                  icon: Icon(Icons.close_rounded, size: 16, color: t.text3),
+                  onPressed: () { ctrl.clear(); onChanged(''); },
+                )
+              : null,
+          contentPadding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+        ),
+      ),
+    );
   }
 }
 
