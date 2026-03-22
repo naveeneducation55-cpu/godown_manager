@@ -193,7 +193,7 @@ Consumer<AppDataProvider>(
                   // ── 4 main action buttons from spec ───────────────────────
                   // Spec: "Button variant=primary"
                   // Spec: padding 10px, borderRadius 10px, fontWeight 500
-                  _ActionButton(
+                 const _ActionButton(
                     icon:    Icons.add_circle_outline_rounded,
                     emoji:   '➕',
                     label:   'Add Movement',
@@ -203,7 +203,7 @@ Consumer<AppDataProvider>(
                   ),
                   const SizedBox(height: AppSpacing.sm + 2), // gap: 10px
 
-                  _ActionButton(
+                  const _ActionButton(
                     icon:    Icons.inventory_2_outlined,
                     emoji:   '📊',
                     label:   'View Stock',
@@ -213,7 +213,7 @@ Consumer<AppDataProvider>(
                   ),
                   const SizedBox(height: AppSpacing.sm + 2),
 
-                  _ActionButton(
+                  const _ActionButton(
                     icon:    Icons.history_rounded,
                     emoji:   '🕘',
                     label:   'History',
@@ -223,7 +223,7 @@ Consumer<AppDataProvider>(
                   ),
                   const SizedBox(height: AppSpacing.sm + 2),
 
-                  _ActionButton(
+                  const _ActionButton(
                     icon:    Icons.tune_outlined,
                     emoji:   '⚙',
                     label:   'Manage Data',
@@ -385,7 +385,7 @@ class _ActionButton extends StatelessWidget {
     final bgColor    = isPrimary ? t.primary    : t.surface;
     final textColor  = isPrimary ? t.primaryFg  : t.text;
     final subColor   = isPrimary
-        ? t.primaryFg.withOpacity(0.75)
+        ? t.primaryFg.withValues(alpha: 0.75)
         : t.text2;
     final iconColor  = isPrimary ? t.primaryFg  : t.primary;
     final borderSide = isPrimary
@@ -400,8 +400,8 @@ class _ActionButton extends StatelessWidget {
         onTap:        () => Navigator.pushNamed(context, route),
         borderRadius: BorderRadius.circular(AppSpacing.radius),
         splashColor:  isPrimary
-            ? Colors.white.withOpacity(0.1)
-            : t.primary.withOpacity(0.05),
+            ? Colors.white.withValues(alpha: 0.1)
+            : t.primary.withValues(alpha: 0.05),
         child: Container(
           // Spec: padding 10px
           padding: const EdgeInsets.all(AppSpacing.sm + 2),
@@ -418,8 +418,8 @@ class _ActionButton extends StatelessWidget {
                 height: 44,
                 decoration: BoxDecoration(
                   color: isPrimary
-                      ? Colors.white.withOpacity(0.15)
-                      : t.primary.withOpacity(0.08),
+                      ? Colors.white.withValues(alpha: 0.15)
+                      : t.primary.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
                 ),
                 child: Icon(icon, size: 20, color: iconColor),
@@ -480,6 +480,7 @@ class _SyncStatusRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.appTheme;
+    final hasPending = pending > 0;
 
     return GestureDetector(
       onTap: () => Navigator.pushNamed(context, AppRouter.sync),
@@ -495,11 +496,8 @@ class _SyncStatusRow extends StatelessWidget {
         ),
         child: Row(
           children: [
-            // Sync icon
             Icon(Icons.sync_rounded, size: 14, color: t.text3),
             const SizedBox(width: AppSpacing.sm),
-
-            // Status text
             Text(
               'sync · ',
               style: AppFonts.monoStyle(size: 11, color: t.text3),
@@ -509,18 +507,18 @@ class _SyncStatusRow extends StatelessWidget {
               height: 6,
               margin: const EdgeInsets.only(right: 4),
               decoration: BoxDecoration(
-                color:        t.success,
+                color:        hasPending ? t.warnFg : t.success,
                 borderRadius: BorderRadius.circular(99),
               ),
             ),
             Text(
-              'all synced',
-              style: AppFonts.monoStyle(size: 11, color: t.success),
+              hasPending ? '$pending pending' : 'all synced',
+              style: AppFonts.monoStyle(
+                size:  11,
+                color: hasPending ? t.warnFg : t.success,
+              ),
             ),
-
             const Spacer(),
-
-            // Tap to view sync details
             Text(
               'details →',
               style: AppFonts.monoStyle(size: 11, color: t.text3),
