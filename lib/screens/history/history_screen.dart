@@ -278,13 +278,13 @@ class _LogRow extends StatelessWidget {
         ? m.quantity.toInt().toString()
         : m.quantity.toStringAsFixed(1);
 
-    // From label — -1 means external supplier
-    final fromName = m.fromLocationId == -1
+    // From label — 'SUPPLIER' means opening stock from external source
+    final fromName = m.fromLocationId == 'SUPPLIER'
         ? 'Supplier'
         : (from?.name ?? '—');
 
-    // Supplier movements (-1) cannot be edited — no route to change
-    final canEdit = m.fromLocationId != -1;
+    // Opening stock movements (SUPPLIER) cannot be edited
+    final canEdit = m.fromLocationId != 'SUPPLIER';
 
     return GestureDetector(
       onTap: canEdit

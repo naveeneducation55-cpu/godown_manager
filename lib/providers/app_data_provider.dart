@@ -26,6 +26,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../database/database_helper.dart';
 import '../services/sync_service.dart';
+import '../services/supabase_service.dart';
 import '../utils/id_generator.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -320,7 +321,8 @@ class AppDataProvider extends ChangeNotifier {
 
 void startRealtimeSync() {
   SyncService.instance.startAutoSync(
-    onRemoteMovement: mergeRemoteMovement,
+    onRemoteMovement:  mergeRemoteMovement,
+    onMovementsSynced: _markMovementsSyncedInMemory,
   );
 }
   // P2: compute() moves model parsing to a background isolate
@@ -335,7 +337,7 @@ void startRealtimeSync() {
       db.getItems(),
       db.getLocations(),
       db.getStaff(),
-      db.getMovements(),
+      db.getMovements(limit: 99999),  // load all — stock calc needs full history
     ]);
 
     debugPrint('AppDataProvider: raw rows — '
@@ -357,9 +359,10 @@ void startRealtimeSync() {
         'staff:\${_staff.length} '
         'movements:\${_movements.length}');
 
-    // If staff is empty something went wrong with DB — reseed
-    if (_staff.isEmpty) {
-      debugPrint('AppDataProvider: staff empty — reseeding DB');
+    // If staff is empty on a completely fresh install — seed once
+    // Do NOT reseed if data exists (even partially) — avoids duplicate IDs
+    if (_staff.isEmpty && _items.isEmpty && _locations.isEmpty) {
+      debugPrint('AppDataProvider: fresh install — seeding DB');
       await db.reseed();
       final staffRows = await db.getStaff();
       _staff..clear()..addAll(_safeParseStaff(staffRows));
@@ -367,7 +370,7 @@ void startRealtimeSync() {
       _items..clear()..addAll(_safeParseItems(itemRows));
       final locRows = await db.getLocations();
       _locations..clear()..addAll(_safeParseLocations(locRows));
-      debugPrint('AppDataProvider: after reseed — staff:\${_staff.length}');
+      debugPrint('AppDataProvider: after seed — staff:\${_staff.length}');
     }
 
     _invalidateCaches();
@@ -506,6 +509,16 @@ void startRealtimeSync() {
         createdAt: now, updatedAt: now,
       ));
 
+      // Push to Supabase immediately — fire and forget, non-blocking
+      unawaited(SupabaseService.instance.pushItems([{
+        'item_id':    itemId,
+        'item_name':  name,
+        'unit':       unit,
+        'created_at': now.toIso8601String(),
+        'updated_at': now.toIso8601String(),
+        'is_deleted': 0,
+      }]));
+
       final staffFallback = _staff.isNotEmpty ? _staff.first.id : 'STF-00001';
       if (openingLocationId != null && openingQty != null && openingQty > 0) {
         final mvtId = await IdGenerator.instance.movement();
@@ -559,6 +572,14 @@ void startRealtimeSync() {
       item.name      = name;
       item.unit      = unit;
       item.updatedAt = now;
+      // Push update to Supabase immediately
+      unawaited(SupabaseService.instance.pushItems([{
+        'item_id':    id,
+        'item_name':  name,
+        'unit':       unit,
+        'updated_at': now.toIso8601String(),
+        'is_deleted': 0,
+      }]));
       _notify();
     } catch (e) {
       debugPrint('editItem($id): $e');
@@ -572,6 +593,14 @@ void startRealtimeSync() {
       final item     = _items.firstWhere((i) => i.id == id);
       item.isDeleted = true;
       item.updatedAt = now;
+      // Push deletion flag to Supabase immediately
+      unawaited(SupabaseService.instance.pushItems([{
+        'item_id':    id,
+        'item_name':  item.name,
+        'unit':       item.unit,
+        'updated_at': now.toIso8601String(),
+        'is_deleted': 1,
+      }]));
       _invalidateCaches();
       _notify();
     } catch (e) {
@@ -607,6 +636,15 @@ void startRealtimeSync() {
         id: locId, name: name, type: type,
         createdAt: now, updatedAt: now,
       ));
+      // Push to Supabase immediately
+      unawaited(SupabaseService.instance.pushLocations([{
+        'location_id':   locId,
+        'location_name': name,
+        'type':          type,
+        'created_at':    now.toIso8601String(),
+        'updated_at':    now.toIso8601String(),
+        'is_deleted':    0,
+      }]));
       _notify();
     } catch (e) {
       debugPrint('addLocation error: $e');
@@ -629,6 +667,14 @@ void startRealtimeSync() {
       loc.name      = name;
       loc.type      = type;
       loc.updatedAt = now;
+      // Push update to Supabase immediately
+      unawaited(SupabaseService.instance.pushLocations([{
+        'location_id':   id,
+        'location_name': name,
+        'type':          type,
+        'updated_at':    now.toIso8601String(),
+        'is_deleted':    0,
+      }]));
       _notify();
     } catch (e) {
       debugPrint('editLocation($id): $e');
@@ -642,6 +688,14 @@ void startRealtimeSync() {
       final loc     = _locations.firstWhere((l) => l.id == id);
       loc.isDeleted = true;
       loc.updatedAt = now;
+      // Push deletion flag to Supabase immediately
+      unawaited(SupabaseService.instance.pushLocations([{
+        'location_id':   id,
+        'location_name': loc.name,
+        'type':          loc.type,
+        'updated_at':    now.toIso8601String(),
+        'is_deleted':    1,
+      }]));
       _invalidateCaches();
       _notify();
     } catch (e) {
@@ -677,6 +731,14 @@ void startRealtimeSync() {
         id: staffId, name: name, pin: pin,
         role: role, createdAt: now,
       ));
+      // Push to Supabase immediately
+      unawaited(SupabaseService.instance.pushStaff([{
+        'staff_id':   staffId,
+        'staff_name': name,
+        'pin':        pin,
+        'role':       role,
+        'created_at': now.toIso8601String(),
+      }]));
       _notify();
     } catch (e) {
       debugPrint('addStaff error: $e');
@@ -701,6 +763,14 @@ void startRealtimeSync() {
       s.pin  = pin;
       s.role = newRole;
       if (_currentStaff?.id == id) _currentStaff = s;
+      // Push update to Supabase immediately
+      unawaited(SupabaseService.instance.pushStaff([{
+        'staff_id':   id,
+        'staff_name': name,
+        'pin':        pin,
+        'role':       newRole,
+        'created_at': s.createdAt.toIso8601String(),
+      }]));
       _notify();
     } catch (e) {
       debugPrint('editStaff($id): $e');
@@ -709,9 +779,12 @@ void startRealtimeSync() {
 
   Future<void> deleteStaff(String id) async {
     try {
+      final s = _staff.firstWhere((s) => s.id == id);
       await DatabaseHelper.instance.deleteStaff(id);
       _staff.removeWhere((s) => s.id == id);
       if (_currentStaff?.id == id) { _currentStaff = null; }
+      // Delete from Supabase immediately — staff has no soft delete
+      unawaited(SupabaseService.instance.deleteStaff(id));
       _notify();
     } catch (e) {
       debugPrint('deleteStaff($id): $e');
@@ -866,7 +939,8 @@ void startRealtimeSync() {
   // Full reload of movements from SQLite — after pull or on error
   Future<void> _reloadMovements() async {
     try {
-      final rows   = await DatabaseHelper.instance.getMovements();
+      // Load all movements — no limit — so stock calculation is always accurate
+      final rows   = await DatabaseHelper.instance.getMovements(limit: 99999);
       final parsed = await compute(_parseMovements, rows);
       _movements..clear()..addAll(parsed);
       _invalidateCaches();
@@ -874,6 +948,16 @@ void startRealtimeSync() {
     } catch (e) {
       debugPrint('AppDataProvider._reloadMovements error: \$e');
     }
+  }
+
+  // Called by SyncService after successful push — updates in-memory list
+  // without a full DB reload so UI reflects synced status immediately
+  void _markMovementsSyncedInMemory(List<String> ids) {
+    final idSet = ids.toSet();
+    for (final m in _movements) {
+      if (idSet.contains(m.id)) m.syncStatus = 'synced';
+    }
+    _notify();
   }
 
   // Manual sync — called from SyncScreen button
