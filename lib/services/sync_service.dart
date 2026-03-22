@@ -51,6 +51,8 @@ class SyncService {
 
   // Callback — AppDataProvider registers this to reload data after pull
   void Function(Map<String,dynamic>)? _onRemoteMovement;
+  // Callback — called after successful push so provider updates in-memory sync status
+  void Function(List<String> ids)? _onMovementsSynced;
 
   // ── Timers ─────────────────────────────────────────────────────────────────
   Timer?               _periodicTimer;
@@ -59,13 +61,15 @@ class SyncService {
   // ── Start ──────────────────────────────────────────────────────────────────
   void startAutoSync({
     void Function(Map<String,dynamic>)? onRemoteMovement,
+    void Function(List<String> ids)?    onMovementsSynced,
   }) {
     if (!AppConfig.isSyncEnabled) {
       debugPrint('SyncService: disabled — keys not configured');
       return;
     }
 
-    _onRemoteMovement = onRemoteMovement;
+    _onRemoteMovement  = onRemoteMovement;
+    _onMovementsSynced = onMovementsSynced;
 
     // 1. Realtime subscription — instant updates from other devices
     SupabaseService.instance.subscribeToMovements(
@@ -80,6 +84,7 @@ class SyncService {
     );
 
     // 3. Sync immediately on network restore
+    // connectivity_plus 5.0.2 on Android emits single ConnectivityResult
     _connectivitySub = Connectivity().onConnectivityChanged.listen((result) {
       final online = result != ConnectivityResult.none;
       if (online) {
@@ -108,13 +113,17 @@ class SyncService {
   }
 
   // ── Handle realtime movement from another device ───────────────────────────
-  // Runs on main isolate — kept lightweight intentionally
-  // Heavy processing (parsing, cache refresh) done in AppDataProvider callback
   Future<void> _handleRemoteMovement(Map<String,dynamic> row) async {
     try {
-      await DatabaseHelper.instance.upsertMovementFromRemote(row);
-      _onRemoteMovement?.call(row); // notify AppDataProvider to reload
-      debugPrint('SyncService: realtime movement merged — ${row['movement_id']}');
+      final changed = await DatabaseHelper.instance.upsertMovementFromRemote(row);
+      // Only notify provider if data actually changed — prevents echo loop
+      // when this device's own push comes back via realtime subscription
+      if (changed) {
+        _onRemoteMovement?.call(row);
+        debugPrint('SyncService: realtime movement merged — ${row['movement_id']}');
+      } else {
+        debugPrint('SyncService: realtime echo skipped — ${row['movement_id']}');
+      }
     } catch (e) {
       debugPrint('SyncService._handleRemoteMovement error: $e');
     }
@@ -153,13 +162,14 @@ class SyncService {
     debugPrint('SyncService: sync started (silent=$silent)');
 
     try {
-      // ── Step 1: Push pending movements ──────────────────────────────────
+      // ── Step 1: Push master data first — items/locations/staff must exist
+      // in Supabase before movements can reference them (foreign key constraint)
+      await _pushMasterData();
+
+      // ── Step 2: Push pending movements ──────────────────────────────────
       final pushResult = await _pushPending();
       if (!pushResult.isSuccess) throw Exception(pushResult.error);
       final pushed = pushResult.data ?? 0;
-
-      // ── Step 2: Push master data (only if changed) ───────────────────────
-      await _pushMasterData();
 
       // ── Step 3: Pull movements from other devices since last sync ─────────
       final pullResult = await _pullAndMerge();
@@ -200,18 +210,20 @@ class SyncService {
     final result = await SupabaseService.instance.pushMovements(serialised);
     if (!result.isSuccess) return SyncResult.err(result.error);
 
-    // Mark only successfully pushed records as synced — String IDs
+    // Mark only successfully pushed records as synced in SQLite
     final ids = pending.map((m) => m['movement_id'] as String).toList();
     await db.markMovementsSynced(ids);
+    // Notify provider to update in-memory sync status so UI reflects change
+    _onMovementsSynced?.call(ids);
     return SyncResult.ok(result.data ?? 0);
   }
 
   // ── Push master data — items, locations, staff ────────────────────────────
-  // Performance: skip if nothing changed since last push
+  // Runs on first sync always, then throttled to once every 5 minutes.
+  // Uses upsert — existing records update, new records insert. Safe to re-run.
   DateTime? _lastMasterPush;
 
   Future<void> _pushMasterData() async {
-    // Only push master data every 5 minutes — it rarely changes
     final now = DateTime.now();
     if (_lastMasterPush != null &&
         now.difference(_lastMasterPush!).inMinutes < 5) {
@@ -220,22 +232,24 @@ class SyncService {
 
     try {
       final db      = DatabaseHelper.instance;
+      // Set timestamp before push — prevents second call within 5 min
+      // even if this call is still in progress
+      _lastMasterPush = now;
+
       final results = await Future.wait([
-        db.getItems(),
-        db.getLocations(),
+        db.getAllItems(),
+        db.getAllLocations(),
         db.getStaff(),
       ]);
 
-      await Future.wait([
-        SupabaseService.instance.pushItems(
-            _serialiseMaster(results[0])),
-        SupabaseService.instance.pushLocations(
-            _serialiseMaster(results[1])),
-        SupabaseService.instance.pushStaff(
-            _serialiseMaster(results[2])),
-      ]);
+      // Sequential — items and locations must exist before movements reference them
+      await SupabaseService.instance.pushItems(
+          _serialiseMaster(results[0]));
+      await SupabaseService.instance.pushLocations(
+          _serialiseMaster(results[1]));
+      await SupabaseService.instance.pushStaff(
+          _serialiseMaster(results[2]));
 
-      _lastMasterPush = now;
       debugPrint('SyncService: master data pushed');
     } catch (e) {
       debugPrint('SyncService._pushMasterData: $e');

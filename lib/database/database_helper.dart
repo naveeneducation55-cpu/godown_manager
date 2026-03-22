@@ -61,6 +61,7 @@ class DatabaseHelper {
 
   // ── Create all tables ──────────────────────────────────────────────────────
   Future<void> _onCreate(Database db, int version) async {
+    // Create tables inside transaction — atomic, fast
     await db.transaction((txn) async {
 
       // Items table
@@ -87,7 +88,7 @@ class DatabaseHelper {
         )
       ''');
 
-      // Staff table — role added beyond spec for admin/staff distinction
+      // Staff table
       await txn.execute('''
         CREATE TABLE $tStaff (
           staff_id    TEXT    PRIMARY KEY,
@@ -99,7 +100,7 @@ class DatabaseHelper {
         )
       ''');
 
-      // Movements table — from spec section 5
+      // Movements table
       await txn.execute('''
         CREATE TABLE $tMovements (
           movement_id     TEXT    PRIMARY KEY,
@@ -118,7 +119,7 @@ class DatabaseHelper {
         )
       ''');
 
-      // Indexes — spec section 16
+      // Indexes
       await txn.execute(
         'CREATE INDEX idx_movements_item_id ON $tMovements(item_id)');
       await txn.execute(
@@ -127,18 +128,17 @@ class DatabaseHelper {
         'CREATE INDEX idx_movements_to ON $tMovements(to_location)');
       await txn.execute(
         'CREATE INDEX idx_movements_created ON $tMovements(created_at)');
-
-      // Seed real data
-      await _seedData(txn);
     });
+
+    // Seed OUTSIDE the transaction — IdGenerator opens id_sequences.db
+    // separately and would deadlock if called inside the transaction above
+    await _seedData(db);
   }
 
-  // ── Seed initial data ──────────────────────────────────────────────────────
-  Future<void> _seedData(Transaction txn) async {
+  Future<void> _seedData(Database db) async {
     final idGen = IdGenerator.instance;
     final now = DateTime.now().toIso8601String();
 
-    // Items — real products
     final itemIds = <String>[];
     for (final item in [
       ('60*90 Dabangg',         'pcs'),
@@ -152,7 +152,7 @@ class DatabaseHelper {
     ]) {
       final id = await idGen.item();
       itemIds.add(id);
-      await txn.insert(tItems, {
+      await db.insert(tItems, {
         'item_id':    id,
         'item_name':  item.$1,
         'unit':       item.$2,
@@ -162,7 +162,6 @@ class DatabaseHelper {
       });
     }
 
-    // Locations
     final locIds = <String>[];
     for (final loc in [
       ('Godown A', 'godown'),
@@ -172,7 +171,7 @@ class DatabaseHelper {
     ]) {
       final id = await idGen.location();
       locIds.add(id);
-      await txn.insert(tLocations, {
+      await db.insert(tLocations, {
         'location_id':   id,
         'location_name': loc.$1,
         'type':          loc.$2,
@@ -182,7 +181,6 @@ class DatabaseHelper {
       });
     }
 
-    // Staff — first is admin
     final staffIds = <String>[];
     for (final s in [
       ('Ramesh', '1234', 'admin'),
@@ -191,7 +189,7 @@ class DatabaseHelper {
     ]) {
       final id = await idGen.staff();
       staffIds.add(id);
-      await txn.insert(tStaff, {
+      await db.insert(tStaff, {
         'staff_id':   id,
         'staff_name': s.$1,
         'pin':        s.$2,
@@ -200,10 +198,6 @@ class DatabaseHelper {
       });
     }
 
-    // Sample movements (so stock/history are not empty on first launch)
-    // itemIds index:  0=Dabangg,1=JioVip,2=Sonata,3=Khubsurat,4=Flora,5=Metro70,6=Metro90,7=Metro60
-    // locIds index:   0=GodownA,1=GodownB,2=GodownC,3=Shop
-    // staffIds index: 0=Ramesh,1=Suresh,2=Dinesh
     final seedMvts = [
       (item: 0, from: 0, to: 3, staff: 0, qty: 100.0, hrs: 2,  remark: ''),
       (item: 1, from: 0, to: 3, staff: 1, qty: 50.0,  hrs: 3,  remark: ''),
@@ -219,7 +213,7 @@ class DatabaseHelper {
     for (final m in seedMvts) {
       final id = await idGen.movement();
       final ts = base.subtract(Duration(hours: m.hrs)).toIso8601String();
-      await txn.insert(tMovements, {
+      await db.insert(tMovements, {
         'movement_id':   id,
         'item_id':       itemIds[m.item],
         'quantity':      m.qty,
@@ -230,7 +224,7 @@ class DatabaseHelper {
         'updated_at':    ts,
         'edited':        0,
         'edited_by':     null,
-        'sync_status':   'pending',
+        'sync_status':   'synced',
         'remark':        m.remark.isEmpty ? null : m.remark,
       });
     }
@@ -247,6 +241,12 @@ class DatabaseHelper {
       whereArgs: [0],
       orderBy: 'item_name ASC',
     );
+  }
+
+  // Fetch ALL items including soft-deleted — used by sync to keep Supabase in sync
+  Future<List<Map<String, dynamic>>> getAllItems() async {
+    final d = await db;
+    return d.query(tItems, orderBy: 'item_name ASC');
   }
 
   Future<String> insertItem(Map<String, dynamic> data) async {
@@ -285,6 +285,12 @@ class DatabaseHelper {
       whereArgs: [0],
       orderBy:   'location_name ASC',
     );
+  }
+
+  // Fetch ALL locations including soft-deleted — used by sync
+  Future<List<Map<String, dynamic>>> getAllLocations() async {
+    final d = await db;
+    return d.query(tLocations, orderBy: 'location_name ASC');
   }
 
   Future<String> insertLocation(Map<String, dynamic> data) async {
@@ -431,11 +437,11 @@ await d.rawUpdate(
   }
 
   // Upsert a movement received from Supabase
-  // Conflict resolution: remote wins only if its updated_at is newer
-  Future<void> upsertMovementFromRemote(Map<String, dynamic> remote) async {
+  // Returns true if data was inserted/updated, false if skipped (no change)
+  Future<bool> upsertMovementFromRemote(Map<String, dynamic> remote) async {
     final d          = await db;
-    final remoteId   = remote['movement_id'] as int;
-    final remoteTs   = remote['updated_at']  as String;
+    final remoteId   = remote['movement_id'].toString();
+    final remoteTs   = remote['updated_at']?.toString() ?? '';
 
     final existing = await d.query(
       tMovements,
@@ -445,33 +451,32 @@ await d.rawUpdate(
     );
 
     if (existing.isEmpty) {
-      // New record from another device — insert
       await d.insert(tMovements, {
         'movement_id':   remoteId,
-        'item_id':       remote['item_id'],
+        'item_id':       remote['item_id']?.toString(),
         'quantity':      remote['quantity'],
-        'from_location': remote['from_location'],
-        'to_location':   remote['to_location'],
-        'staff_id':      remote['staff_id'],
-        'created_at':    remote['created_at'],
+        'from_location': remote['from_location']?.toString(),
+        'to_location':   remote['to_location']?.toString(),
+        'staff_id':      remote['staff_id']?.toString(),
+        'created_at':    remote['created_at']?.toString(),
         'updated_at':    remoteTs,
         'edited':        remote['edited'] == true ? 1 : 0,
-        'edited_by':     remote['edited_by'],
+        'edited_by':     remote['edited_by']?.toString(),
         'sync_status':   'synced',
         'remark':        remote['remark'],
       });
+      return true; // new record inserted
     } else {
-      // Exists locally — only update if remote is newer (spec section 13)
       final localTs = existing.first['updated_at'] as String;
       if (remoteTs.compareTo(localTs) > 0) {
         await d.update(
           tMovements,
           {
             'quantity':      remote['quantity'],
-            'from_location': remote['from_location'],
-            'to_location':   remote['to_location'],
+            'from_location': remote['from_location']?.toString(),
+            'to_location':   remote['to_location']?.toString(),
             'edited':        remote['edited'] == true ? 1 : 0,
-            'edited_by':     remote['edited_by'],
+            'edited_by':     remote['edited_by']?.toString(),
             'updated_at':    remoteTs,
             'sync_status':   'synced',
             'remark':        remote['remark'],
@@ -479,8 +484,9 @@ await d.rawUpdate(
           where:     'movement_id = ?',
           whereArgs: [remoteId],
         );
+        return true; // existing record updated
       }
-      // else: local is newer — keep local, skip remote
+      return false; // local is same or newer — skip
     }
   }
 
@@ -502,7 +508,7 @@ await d.rawUpdate(
         l.location_name,
         l.type AS location_type,
         COALESCE(SUM(CASE WHEN m.to_location   = l.location_id THEN m.quantity ELSE 0 END), 0) AS incoming,
-        COALESCE(SUM(CASE WHEN m.from_location = l.location_id AND m.from_location != -1 THEN m.quantity ELSE 0 END), 0) AS outgoing
+        COALESCE(SUM(CASE WHEN m.from_location = l.location_id AND m.from_location != 'SUPPLIER' THEN m.quantity ELSE 0 END), 0) AS outgoing
       FROM $tItems i
       CROSS JOIN $tLocations l
       LEFT JOIN $tMovements m ON m.item_id = i.item_id
