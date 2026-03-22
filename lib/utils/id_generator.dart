@@ -1,23 +1,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // id_generator.dart
 //
-// Generates human-readable, sortable, collision-safe IDs.
-//
-// Format: PREFIX-NNNNN-YYYYMMDD-HHMM
-//   PREFIX  = MOV / ITM / LOC / STF
-//   NNNNN   = 5-digit zero-padded sequence (per prefix, persisted in SQLite)
+// Format: PREFIX-NNNNN-YYYYMMDD
+//   PREFIX   = MOV / ITM / LOC / STF
+//   NNNNN    = 5-digit zero-padded sequence
 //   YYYYMMDD = date
-//   HHMM    = time
 //
-// Example: MOV-00001-20260321-1040
+// Example: MOV-00001-20260322
 //
-// Sequence counter:
-//   Stored in a 'id_sequences' table in SQLite.
-//   Incremented atomically before each insert.
-//   Survives app restarts.
-//   No collision possible — each device has its own counter.
-//   When syncing, IDs from other devices never clash because
-//   the date+time component makes them unique even if sequence resets.
+// Stored in id_sequences.db — separate file from godown_inventory.db
+// to avoid lock conflicts during onCreate transactions.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import 'package:sqflite/sqflite.dart';
@@ -32,7 +24,6 @@ class IdGenerator {
   static const _tableName = 'sequences';
   Database? _db;
 
-  // ── Open sequence DB ───────────────────────────────────────────────────────
   Future<Database> get _seqDb async {
     _db ??= await _open();
     return _db!;
@@ -50,7 +41,6 @@ class IdGenerator {
             last_seq INTEGER NOT NULL DEFAULT 0
           )
         ''');
-        // Initialise all prefixes
         for (final p in ['MOV', 'ITM', 'LOC', 'STF']) {
           await db.insert(_tableName, {'prefix': p, 'last_seq': 0});
         }
@@ -58,11 +48,9 @@ class IdGenerator {
     );
   }
 
-  // ── Get next sequence number atomically ───────────────────────────────────
-  // Uses a transaction so concurrent calls never get the same number
   Future<int> _nextSeq(String prefix) async {
     final db = await _seqDb;
-    int next = 1;
+    int next  = 1;
     await db.transaction((txn) async {
       final rows = await txn.query(
         _tableName,
@@ -85,37 +73,27 @@ class IdGenerator {
     return next;
   }
 
-  // ── Generate ID ────────────────────────────────────────────────────────────
   Future<String> _generate(String prefix) async {
     try {
       final seq = await _nextSeq(prefix);
       final now = DateTime.now();
-
       final date = '${now.year}'
-          '${now.month.toString().padLeft(2,'0')}'
-          '${now.day.toString().padLeft(2,'0')}';
-
-      final time = '${now.hour.toString().padLeft(2,'0')}'
-          '${now.minute.toString().padLeft(2,'0')}';
-
+          '${now.month.toString().padLeft(2, '0')}'
+          '${now.day.toString().padLeft(2, '0')}';
       final seqStr = seq.toString().padLeft(5, '0');
-
-      return '$prefix-$seqStr-$date-$time';
+      return '$prefix-$seqStr-$date';
     } catch (e) {
       debugPrint('IdGenerator._generate($prefix) error: $e');
-      // Fallback — timestamp only, still unique enough
       final ts = DateTime.now().millisecondsSinceEpoch;
       return '$prefix-00000-$ts';
     }
   }
 
-  // ── Public generators ──────────────────────────────────────────────────────
   Future<String> movement()  => _generate('MOV');
   Future<String> item()      => _generate('ITM');
   Future<String> location()  => _generate('LOC');
   Future<String> staff()     => _generate('STF');
 
-  // Close DB on app dispose
   Future<void> close() async {
     await _db?.close();
     _db = null;

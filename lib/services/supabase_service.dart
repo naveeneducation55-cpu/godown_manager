@@ -241,4 +241,20 @@ class SupabaseService {
       return SyncResult.err('pushStaff: $e');
     }
   }
+
+  // Hard delete staff from Supabase — staff table has no is_deleted column
+  Future<SyncResult<void>> deleteStaff(String staffId) async {
+    if (!AppConfig.isSyncEnabled) return const SyncResult.ok(null);
+    try {
+      await _client
+          .from('staff')
+          .delete()
+          .eq('staff_id', staffId)
+          .timeout(const Duration(seconds: 10));
+      return const SyncResult.ok(null);
+    } catch (e) {
+      debugPrint('SupabaseService.deleteStaff: $e');
+      return SyncResult.err('deleteStaff: $e');
+    }
+  }
 }
