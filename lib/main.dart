@@ -7,6 +7,7 @@ import 'app_theme.dart';
 import 'router.dart';
 import 'screens/login/login_screen.dart';
 import 'screens/home/home_screen.dart';
+import 'services/supabase_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,14 +18,20 @@ void main() async {
   ]);
 
   final savedStaffId = await getSavedStaffId();
-final dataProvider = AppDataProvider();
-await dataProvider.initialize();
+
+  // Initialize DB and load all data BEFORE runApp
+  final dataProvider = AppDataProvider();
+  await dataProvider.initialize();
+
+  // Initialize Supabase then start realtime sync
+  await SupabaseService.initialize();
+  dataProvider.startRealtimeSync();
 
   runApp(
     MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
-      ChangeNotifierProvider<AppDataProvider>.value(value: dataProvider),
+        ChangeNotifierProvider<AppDataProvider>.value(value: dataProvider),
       ],
       child: GodownApp(savedStaffId: savedStaffId),
     ),
@@ -32,7 +39,7 @@ await dataProvider.initialize();
 }
 
 class GodownApp extends StatefulWidget {
-  final int? savedStaffId;
+  final String? savedStaffId;
   const GodownApp({super.key, this.savedStaffId});
   @override
   State<GodownApp> createState() => _GodownAppState();
@@ -67,7 +74,6 @@ class _GodownAppState extends State<GodownApp> {
       );
     }
 
-    // Build themes once — extensions registered here
     final lightTheme = AppTheme.light()
         .copyWith(extensions: <ThemeExtension<dynamic>>[AppThemeExtension.light()]);
     final darkTheme = AppTheme.dark()
@@ -79,19 +85,19 @@ class _GodownAppState extends State<GodownApp> {
       themeMode:                 themeProvider.mode,
       theme:                     lightTheme,
       darkTheme:                 darkTheme,
-     home: Consumer<AppDataProvider>(
-  builder: (context, data, _) {
-    if (widget.savedStaffId != null && data.isLoggedIn) {
-      return const HomeScreen();
-    }
-    return const LoginScreen();
-  },
-),
-onGenerateRoute: (settings) {
-  final route = AppRouter.onGenerateRoute(settings);
-  return route;
-},
-navigatorKey: GlobalKey<NavigatorState>(),
+      home: Consumer<AppDataProvider>(
+        builder: (context, data, _) {
+          if (data.isLoggedIn) {
+            return const HomeScreen();
+          }
+          return const LoginScreen();
+        },
+      ),
+      onGenerateRoute: (settings) {
+        final route = AppRouter.onGenerateRoute(settings);
+        return route;
+      },
+      navigatorKey: GlobalKey<NavigatorState>(),
     );
   }
 }

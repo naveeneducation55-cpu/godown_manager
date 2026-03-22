@@ -26,20 +26,20 @@ import '../../router.dart';
 
 const _kStaffIdKey = 'logged_in_staff_id';
 
-Future<int?> getSavedStaffId() async {
+Future<String?> getSavedStaffId() async {
   try {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt(_kStaffIdKey);
+    return prefs.getString(_kStaffIdKey);
   } catch (e) {
     debugPrint('getSavedStaffId error: $e');
     return null;
   }
 }
 
-Future<void> saveStaffId(int id) async {
+Future<void> saveStaffId(String id) async {
   try {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_kStaffIdKey, id);
+    await prefs.setString(_kStaffIdKey, id);
   } catch (e) {
     debugPrint('saveStaffId error: $e');
   }
@@ -91,12 +91,8 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
       ),
       body: SafeArea(
-        bottom: false,
         child: SingleChildScrollView(
-          padding: EdgeInsets.fromLTRB(
-  16, 16, 16, 
-  MediaQuery.of(context).viewInsets.bottom + 16,
-),
+          padding: AppSizes.pagePadding(context),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -209,7 +205,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   physics:          const NeverScrollableScrollPhysics(),
                   mainAxisSpacing:  AppSpacing.sm,
                   crossAxisSpacing: AppSpacing.sm,
-                  childAspectRatio: 2.8,
+                  childAspectRatio: 2.2,
                   children: _keys.map((key) {
                     if (key.isEmpty) return const SizedBox.shrink();
                     return _PinKey(
@@ -289,10 +285,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
 
       // Replace login with home — back button won't return to login
-      Navigator.of(context).pushNamedAndRemoveUntil(
-  AppRouter.home, 
-  (route) => false,
-);
+      Navigator.of(context).pushReplacementNamed(AppRouter.home);
     } else {
       HapticFeedback.heavyImpact();
       if (!mounted) return;

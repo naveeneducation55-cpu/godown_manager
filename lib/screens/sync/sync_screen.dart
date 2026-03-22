@@ -1,8 +1,11 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../app_theme.dart';
 import '../../common_widgets.dart';
 import '../../providers/app_data_provider.dart';
+import '../../services/sync_service.dart';
+import '../../config/app_config.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // sync_screen.dart
@@ -34,55 +37,95 @@ class SyncScreen extends StatefulWidget {
 
 class _SyncScreenState extends State<SyncScreen> {
 
-  _SyncState _syncState  = _SyncState.idle;
+  _SyncState _syncState        = _SyncState.idle;
   String?    _lastSyncTime;
   String?    _errorMsg;
   int        _syncedThisSession = 0;
 
-  // ── Simulate sync ─────────────────────────────────────────────────────────
-  // Phase 2: replace this with real Supabase push
-  // Steps mirror spec section 12:
-  //   pending → push to server → mark synced
-  Future<void> _startSync() async {
-    final data = context.read<AppDataProvider>();
+  // Stream subscription — listens to SyncService status changes
+  // Disposed in dispose() to prevent memory leaks
+  StreamSubscription<SyncStatus>? _statusSub;
 
-    if (data.pendingSyncCount == 0) {
-      showSuccess(context, 'Everything is already synced');
+  @override
+  void initState() {
+    super.initState();
+    // Listen to SyncService status stream
+    // This keeps UI in sync with background auto-sync as well
+    _statusSub = SyncService.instance.statusStream.listen(
+      _onSyncStatus,
+      onError: (e) => debugPrint('SyncScreen stream error: $e'),
+    );
+
+    // Reflect current status if sync already running
+    _onSyncStatus(SyncService.instance.status);
+  }
+
+  @override
+  void dispose() {
+    // Always cancel stream subscription — prevents setState after dispose
+    _statusSub?.cancel();
+    _statusSub = null;
+    super.dispose();
+  }
+
+  // Called on every SyncService status change — from stream OR on init
+  void _onSyncStatus(SyncStatus status) {
+    if (!mounted) return;
+    setState(() {
+      switch (status) {
+        case SyncStatus.idle:
+          _syncState = _SyncState.idle;
+        case SyncStatus.syncing:
+          _syncState = _SyncState.syncing;
+          _errorMsg  = null;
+        case SyncStatus.done:
+          _syncState          = _SyncState.done;
+          _syncedThisSession  = SyncService.instance.pushedCount;
+          _lastSyncTime       = SyncService.instance.lastSyncAt != null
+              ? _fmtTime(SyncService.instance.lastSyncAt!)
+              : null;
+        case SyncStatus.error:
+          _syncState = _SyncState.error;
+          _errorMsg  = SyncService.instance.lastError
+              ?? 'Sync failed. Check connection.';
+      }
+    });
+  }
+
+  // ── Manual sync triggered by button ───────────────────────────────────────
+  // Concurrency: SyncService._isSyncing prevents double-run automatically
+  // We just call syncNow() — SyncService handles the rest
+  Future<void> _startSync() async {
+    if (!mounted) return;
+
+    // If sync not configured — fall back to local mark-as-synced
+    if (!AppConfig.isSyncEnabled) {
+      final data    = context.read<AppDataProvider>();
+      final pending = data.pendingSyncCount;
+      if (pending == 0) {
+        showSuccess(context, 'Everything is already synced');
+        return;
+      }
+      setState(() => _syncState = _SyncState.syncing);
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (!mounted) return;
+      await data.markAllSynced();
+      if (!mounted) return;
+      setState(() {
+        _syncState         = _SyncState.done;
+        _syncedThisSession = pending;
+        _lastSyncTime      = _fmtTime(DateTime.now());
+      });
       return;
     }
 
-    setState(() {
-      _syncState = _SyncState.syncing;
-      _errorMsg  = null;
-    });
-
-    try {
-      // TODO Phase 2: replace delay with actual Supabase batch upsert
-      // final pending = data.movements
-      //     .where((m) => m.syncStatus == 'pending').toList();
-      // for (final m in pending) {
-      //   await supabase.from('movements').upsert(m.toJson());
-      //   data.markMovementSynced(m.id);
-      // }
-      await Future.delayed(const Duration(milliseconds: 1500));
-
-      if (!mounted) return;
-
-      final count = data.pendingSyncCount;
-      data.markAllSynced();
-
-      setState(() {
-        _syncState          = _SyncState.done;
-        _syncedThisSession  = count;
-        _lastSyncTime       = _fmtTime(DateTime.now());
-      });
-
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _syncState = _SyncState.error;
-        _errorMsg  = 'Sync failed. Check your connection and try again.';
-      });
+    // Real sync — SyncService handles concurrency, retries, conflict resolution
+    // UI updates automatically via _statusSub stream listener above
+    final ok = await context.read<AppDataProvider>().syncNow();
+    if (!mounted) return;
+    if (!ok && _syncState != _SyncState.error) {
+      // syncNow returned false but stream didn't fire error — show message
+      showError(context, SyncService.instance.lastError ?? 'Sync failed');
     }
   }
 
@@ -163,32 +206,11 @@ class _SyncScreenState extends State<SyncScreen> {
 
               // ── How sync works section ───────────────────────────────────
               const SectionLabel('How sync works'),
-              _InfoCard(steps: const [
-                (
-                  icon:  Icons.add_circle_outline_rounded,
-                  title: 'Movement recorded',
-                  desc:  'Every entry is saved to this device instantly.',
-                  done:  true,
-                ),
-                (
-                  icon:  Icons.pending_outlined,
-                  title: 'Added to sync queue',
-                  desc:  'Marked as "pending" until sent to server.',
-                  done:  true,
-                ),
-                (
-                  icon:  Icons.cloud_upload_outlined,
-                  title: 'Pushed to cloud',
-                  desc:  'Sent to Supabase when internet is available.',
-                  done:  false, // Phase 2
-                ),
-                (
-                  icon:  Icons.devices_outlined,
-                  title: 'Other devices update',
-                  desc:  'All phones see the latest data.',
-                  done:  false, // Phase 2
-                ),
-              ]),
+             _InfoCard(
+  syncEnabled:  AppConfig.isSyncEnabled,
+  lastSyncTime: _lastSyncTime,
+),
+              
 
               const SizedBox(height: AppSpacing.lg),
 
@@ -201,30 +223,7 @@ class _SyncScreenState extends State<SyncScreen> {
               const SizedBox(height: AppSpacing.lg),
 
               // ── Phase 2 note ─────────────────────────────────────────────
-              Container(
-                padding: const EdgeInsets.all(AppSpacing.md),
-                decoration: BoxDecoration(
-                  color:        t.warnBg,
-                  borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-                  border: Border.all(
-                      color: t.warnFg.withOpacity(0.3), width: 0.8),
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(Icons.info_outline_rounded,
-                        size: 14, color: t.warnFg),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Cloud sync (Supabase) will be enabled in Phase 2. '
-                        'All data is currently stored on this device only.',
-                        style: AppFonts.label(color: t.warnFg),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              
 
               const SizedBox(height: AppSpacing.xl),
             ],
@@ -441,8 +440,8 @@ class _StatCard extends StatelessWidget {
     final bg    = warn ? t.errorBg
                 : good ? t.successBg
                 : t.surface;
-    final border = warn ? t.error.withOpacity(0.3)
-                 : good ? t.success.withOpacity(0.3)
+    final border = warn ? t.error.withValues(alpha: 0.3)
+                 : good ? t.success.withValues(alpha: 0.3)
                  : t.border;
 
     return Expanded(
@@ -533,16 +532,46 @@ class _SyncButton extends StatelessWidget {
 }
 
 // ─── How sync works info card ─────────────────────────────────────────────────
-typedef _Step = ({IconData icon, String title, String desc, bool done});
-
+// ─── How sync works info card ─────────────────────────────────────────────────
 class _InfoCard extends StatelessWidget {
-  final List<_Step> steps;
-  const _InfoCard({required this.steps});
+  final bool    syncEnabled;
+  final String? lastSyncTime;
+  const _InfoCard({required this.syncEnabled, this.lastSyncTime});
 
   @override
   Widget build(BuildContext context) {
     final t = context.appTheme;
-    return Container(
+final steps = [
+  (
+    icon:  Icons.add_circle_outline_rounded,
+    title: 'Movement recorded',
+    desc:  'Every entry is saved to this device instantly.',
+    done:  true,
+  ),
+  (
+    icon:  Icons.pending_outlined,
+    title: 'Added to sync queue',
+    desc:  'Marked as pending until sent to server.',
+    done:  true,
+  ),
+  (
+    icon:  Icons.cloud_upload_outlined,
+    title: 'Pushed to cloud',
+    desc:  syncEnabled
+        ? 'Connected to Supabase${lastSyncTime != null ? " · Last sync $lastSyncTime" : ""}'
+        : 'Sent to Supabase when internet is available.',
+    done:  syncEnabled,
+  ),
+  (
+    icon:  Icons.devices_outlined,
+    title: 'Other devices update',
+    desc:  syncEnabled
+        ? 'All 7 phones receive latest data automatically.'
+        : 'All phones see the latest data.',
+    done:  syncEnabled,
+  ),
+];
+return Container(
       decoration: BoxDecoration(
         color:        t.surface,
         borderRadius: BorderRadius.circular(AppSpacing.radius),
@@ -568,8 +597,8 @@ class _InfoCard extends StatelessWidget {
                 width: 32, height: 32,
                 decoration: BoxDecoration(
                   color: step.done
-                      ? t.primary.withOpacity(0.08)
-                      : t.border.withOpacity(0.5),
+                      ? t.primary.withValues(alpha: 0.08)
+                      : t.border.withValues(alpha: 0.5),
                   borderRadius: BorderRadius.circular(AppSpacing.radiusXs),
                 ),
                 child: Icon(
@@ -652,7 +681,7 @@ class _PendingList extends StatelessWidget {
           final staff  = data.staff.firstWhere(
             (s) => s.id == m.staffId,
             orElse: () => StaffModel(
-                id: 0, name: 'Unknown', pin: '', createdAt: DateTime.now()),
+                id: '', name: 'Unknown', pin: '', createdAt: DateTime.now()),
           );
 
           final qty = m.quantity == m.quantity.truncateToDouble()

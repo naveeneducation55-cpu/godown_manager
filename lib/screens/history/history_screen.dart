@@ -47,7 +47,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         final stf  = data.staff.firstWhere(
           (s) => s.id == m.staffId,
           orElse: () => StaffModel(
-              id: 0, name: '', pin: '', createdAt: DateTime.now()),
+              id: '', name: '', pin: '', createdAt: DateTime.now()),
         );
         return (item?.name.toLowerCase().contains(q) ?? false) ||
                stf.name.toLowerCase().contains(q) ||
@@ -262,13 +262,13 @@ class _LogRow extends StatelessWidget {
     final staff = data.staff.firstWhere(
       (s) => s.id == m.staffId,
       orElse: () => StaffModel(
-          id: 0, name: 'Unknown', pin: '', createdAt: DateTime.now()),
+          id: '', name: 'Unknown', pin: '', createdAt: DateTime.now()),
     );
     final editedByStaff = m.editedBy != null
         ? data.staff.firstWhere(
             (s) => s.id == m.editedBy,
             orElse: () => StaffModel(
-                id: 0, name: 'Unknown', pin: '',
+                id: '', name: 'Unknown', pin: '',
                 createdAt: DateTime.now()),
           )
         : null;

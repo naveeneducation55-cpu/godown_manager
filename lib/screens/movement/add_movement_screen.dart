@@ -136,8 +136,8 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
 
     try {
       final data    = context.read<AppDataProvider>();
-      final staffId = data.currentStaff?.id ??
-          (data.staff.isNotEmpty ? data.staff.first.id : 1);
+      final String staffId = data.currentStaff?.id ??
+    (data.staff.isNotEmpty ? data.staff.first.id : '');
 
       data.addMovement(
         itemId:         _selectedItem!.id,

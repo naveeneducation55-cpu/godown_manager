@@ -21,6 +21,7 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:flutter/foundation.dart';
+import '../utils/id_generator.dart';
 
 class DatabaseHelper {
 
@@ -65,7 +66,7 @@ class DatabaseHelper {
       // Items table
       await txn.execute('''
         CREATE TABLE $tItems (
-          item_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+          item_id     TEXT    PRIMARY KEY,
           item_name   TEXT    NOT NULL,
           unit        TEXT    NOT NULL,
           created_at  TEXT    NOT NULL,
@@ -77,7 +78,7 @@ class DatabaseHelper {
       // Locations table
       await txn.execute('''
         CREATE TABLE $tLocations (
-          location_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+          location_id   TEXT    PRIMARY KEY,
           location_name TEXT    NOT NULL,
           type          TEXT    NOT NULL CHECK(type IN ('godown','shop')),
           created_at    TEXT    NOT NULL,
@@ -89,7 +90,7 @@ class DatabaseHelper {
       // Staff table — role added beyond spec for admin/staff distinction
       await txn.execute('''
         CREATE TABLE $tStaff (
-          staff_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+          staff_id    TEXT    PRIMARY KEY,
           staff_name  TEXT    NOT NULL,
           pin         TEXT    NOT NULL,
           role        TEXT    NOT NULL DEFAULT 'staff'
@@ -101,23 +102,19 @@ class DatabaseHelper {
       // Movements table — from spec section 5
       await txn.execute('''
         CREATE TABLE $tMovements (
-          movement_id     INTEGER PRIMARY KEY AUTOINCREMENT,
-          item_id         INTEGER NOT NULL,
+          movement_id     TEXT    PRIMARY KEY,
+          item_id         TEXT    NOT NULL,
           quantity        REAL    NOT NULL CHECK(quantity > 0),
-          from_location   INTEGER NOT NULL,
-          to_location     INTEGER NOT NULL,
-          staff_id        INTEGER NOT NULL,
+          from_location   TEXT    NOT NULL,
+          to_location     TEXT    NOT NULL,
+          staff_id        TEXT    NOT NULL,
           created_at      TEXT    NOT NULL,
           updated_at      TEXT    NOT NULL,
           edited          INTEGER NOT NULL DEFAULT 0,
-          edited_by       INTEGER,
+          edited_by       TEXT,
           sync_status     TEXT    NOT NULL DEFAULT 'pending'
                                   CHECK(sync_status IN ('pending','synced')),
-          remark          TEXT,
-          FOREIGN KEY (item_id)       REFERENCES $tItems(item_id),
-          FOREIGN KEY (from_location) REFERENCES $tLocations(location_id),
-          FOREIGN KEY (to_location)   REFERENCES $tLocations(location_id),
-          FOREIGN KEY (staff_id)      REFERENCES $tStaff(staff_id)
+          remark          TEXT
         )
       ''');
 
@@ -138,9 +135,11 @@ class DatabaseHelper {
 
   // ── Seed initial data ──────────────────────────────────────────────────────
   Future<void> _seedData(Transaction txn) async {
+    final idGen = IdGenerator.instance;
     final now = DateTime.now().toIso8601String();
 
     // Items — real products
+    final itemIds = <String>[];
     for (final item in [
       ('60*90 Dabangg',         'pcs'),
       ('60*90 Jio Vip',         'pcs'),
@@ -151,7 +150,10 @@ class DatabaseHelper {
       ('90*100 Metro',          'pcs'),
       ('60*90 Metro',           'pcs'),
     ]) {
+      final id = await idGen.item();
+      itemIds.add(id);
       await txn.insert(tItems, {
+        'item_id':    id,
         'item_name':  item.$1,
         'unit':       item.$2,
         'created_at': now,
@@ -161,13 +163,17 @@ class DatabaseHelper {
     }
 
     // Locations
+    final locIds = <String>[];
     for (final loc in [
       ('Godown A', 'godown'),
       ('Godown B', 'godown'),
       ('Godown C', 'godown'),
       ('Shop',     'shop'),
     ]) {
+      final id = await idGen.location();
+      locIds.add(id);
       await txn.insert(tLocations, {
+        'location_id':   id,
         'location_name': loc.$1,
         'type':          loc.$2,
         'created_at':    now,
@@ -177,12 +183,16 @@ class DatabaseHelper {
     }
 
     // Staff — first is admin
+    final staffIds = <String>[];
     for (final s in [
       ('Ramesh', '1234', 'admin'),
       ('Suresh', '5678', 'staff'),
       ('Dinesh', '9012', 'staff'),
     ]) {
+      final id = await idGen.staff();
+      staffIds.add(id);
       await txn.insert(tStaff, {
+        'staff_id':   id,
         'staff_name': s.$1,
         'pin':        s.$2,
         'role':       s.$3,
@@ -191,26 +201,31 @@ class DatabaseHelper {
     }
 
     // Sample movements (so stock/history are not empty on first launch)
-    final movements = [
-      (itemId: 1, from: 1, to: 4, staff: 1, qty: 100.0, hrsAgo: 2,  remark: ''),
-      (itemId: 2, from: 1, to: 4, staff: 2, qty: 50.0,  hrsAgo: 3,  remark: ''),
-      (itemId: 3, from: 2, to: 4, staff: 1, qty: 30.0,  hrsAgo: 5,  remark: ''),
-      (itemId: 4, from: 1, to: 4, staff: 3, qty: 25.0,  hrsAgo: 6,  remark: ''),
-      (itemId: 5, from: 2, to: 4, staff: 2, qty: 60.0,  hrsAgo: 26, remark: ''),
-      (itemId: 6, from: 1, to: 2, staff: 1, qty: 40.0,  hrsAgo: 28, remark: 'Transfer to B'),
-      (itemId: 7, from: 2, to: 4, staff: 3, qty: 20.0,  hrsAgo: 30, remark: ''),
-      (itemId: 8, from: 1, to: 4, staff: 2, qty: 35.0,  hrsAgo: 50, remark: ''),
+    // itemIds index:  0=Dabangg,1=JioVip,2=Sonata,3=Khubsurat,4=Flora,5=Metro70,6=Metro90,7=Metro60
+    // locIds index:   0=GodownA,1=GodownB,2=GodownC,3=Shop
+    // staffIds index: 0=Ramesh,1=Suresh,2=Dinesh
+    final seedMvts = [
+      (item: 0, from: 0, to: 3, staff: 0, qty: 100.0, hrs: 2,  remark: ''),
+      (item: 1, from: 0, to: 3, staff: 1, qty: 50.0,  hrs: 3,  remark: ''),
+      (item: 2, from: 1, to: 3, staff: 0, qty: 30.0,  hrs: 5,  remark: ''),
+      (item: 3, from: 0, to: 3, staff: 2, qty: 25.0,  hrs: 6,  remark: ''),
+      (item: 4, from: 1, to: 3, staff: 1, qty: 60.0,  hrs: 26, remark: ''),
+      (item: 5, from: 0, to: 1, staff: 0, qty: 40.0,  hrs: 28, remark: 'Transfer to B'),
+      (item: 6, from: 1, to: 3, staff: 2, qty: 20.0,  hrs: 30, remark: ''),
+      (item: 7, from: 0, to: 3, staff: 1, qty: 35.0,  hrs: 50, remark: ''),
     ];
 
     final base = DateTime.now();
-    for (final m in movements) {
-      final ts = base.subtract(Duration(hours: m.hrsAgo)).toIso8601String();
+    for (final m in seedMvts) {
+      final id = await idGen.movement();
+      final ts = base.subtract(Duration(hours: m.hrs)).toIso8601String();
       await txn.insert(tMovements, {
-        'item_id':       m.itemId,
+        'movement_id':   id,
+        'item_id':       itemIds[m.item],
         'quantity':      m.qty,
-        'from_location': m.from,
-        'to_location':   m.to,
-        'staff_id':      m.staff,
+        'from_location': locIds[m.from],
+        'to_location':   locIds[m.to],
+        'staff_id':      staffIds[m.staff],
         'created_at':    ts,
         'updated_at':    ts,
         'edited':        0,
@@ -234,12 +249,13 @@ class DatabaseHelper {
     );
   }
 
-  Future<int> insertItem(Map<String, dynamic> data) async {
+  Future<String> insertItem(Map<String, dynamic> data) async {
     final d = await db;
-    return d.insert(tItems, data);
+    await d.insert(tItems, data);
+    return data['item_id'] as String;
   }
 
-  Future<void> updateItem(int id, Map<String, dynamic> data) async {
+  Future<void> updateItem(String id, Map<String, dynamic> data) async {
     final d = await db;
     await d.update(tItems, data,
       where:     'item_id = ?',
@@ -248,7 +264,7 @@ class DatabaseHelper {
   }
 
   // Soft delete
-  Future<void> softDeleteItem(int id) async {
+  Future<void> softDeleteItem(String id) async {
     final d   = await db;
     final now = DateTime.now().toIso8601String();
     await d.update(tItems,
@@ -271,12 +287,13 @@ class DatabaseHelper {
     );
   }
 
-  Future<int> insertLocation(Map<String, dynamic> data) async {
+  Future<String> insertLocation(Map<String, dynamic> data) async {
     final d = await db;
-    return d.insert(tLocations, data);
+    await d.insert(tLocations, data);
+    return data['location_id'] as String;
   }
 
-  Future<void> updateLocation(int id, Map<String, dynamic> data) async {
+  Future<void> updateLocation(String id, Map<String, dynamic> data) async {
     final d = await db;
     await d.update(tLocations, data,
       where:     'location_id = ?',
@@ -284,7 +301,7 @@ class DatabaseHelper {
     );
   }
 
-  Future<void> softDeleteLocation(int id) async {
+  Future<void> softDeleteLocation(String id) async {
     final d   = await db;
     final now = DateTime.now().toIso8601String();
     await d.update(tLocations,
@@ -303,12 +320,13 @@ class DatabaseHelper {
     return d.query(tStaff, orderBy: 'staff_name ASC');
   }
 
-  Future<int> insertStaff(Map<String, dynamic> data) async {
+  Future<String> insertStaff(Map<String, dynamic> data) async {
     final d = await db;
-    return d.insert(tStaff, data);
+    await d.insert(tStaff, data);
+    return data['staff_id'] as String;
   }
 
-  Future<void> updateStaff(int id, Map<String, dynamic> data) async {
+  Future<void> updateStaff(String id, Map<String, dynamic> data) async {
     final d = await db;
     await d.update(tStaff, data,
       where:     'staff_id = ?',
@@ -316,7 +334,7 @@ class DatabaseHelper {
     );
   }
 
-  Future<void> deleteStaff(int id) async {
+  Future<void> deleteStaff(String id) async {
     final d = await db;
     await d.delete(tStaff,
       where:     'staff_id = ?',
@@ -362,12 +380,13 @@ class DatabaseHelper {
     return (result.first['cnt'] as int?) ?? 0;
   }
 
-  Future<int> insertMovement(Map<String, dynamic> data) async {
+  Future<String> insertMovement(Map<String, dynamic> data) async {
     final d = await db;
-    return d.insert(tMovements, data);
+    await d.insert(tMovements, data);
+    return data['movement_id'] as String;
   }
 
-  Future<void> updateMovement(int id, Map<String, dynamic> data) async {
+  Future<void> updateMovement(String id, Map<String, dynamic> data) async {
     final d = await db;
     await d.update(tMovements, data,
       where:     'movement_id = ?',
@@ -384,6 +403,85 @@ class DatabaseHelper {
       where:     'sync_status = ?',
       whereArgs: ['pending'],
     );
+  }
+
+  // Mark specific movement IDs as synced — called after successful push
+  Future<void> markMovementsSynced(List<String> ids) async {
+    if (ids.isEmpty) return;
+    final d   = await db;
+    final now = DateTime.now().toIso8601String();
+    // Batch update using IN clause
+    final placeholders = ids.map((_) => '?').join(',');
+await d.rawUpdate(
+  'UPDATE $tMovements SET sync_status = ?, updated_at = ? '
+  'WHERE movement_id IN ($placeholders)',
+  ['synced', now, ...ids],
+);
+  }
+
+  // Get only pending movements — used by SyncService push
+  Future<List<Map<String, dynamic>>> getPendingMovements() async {
+    final d = await db;
+    return d.query(
+      tMovements,
+      where:     'sync_status = ?',
+      whereArgs: ['pending'],
+      orderBy:   'created_at ASC', // push oldest first
+    );
+  }
+
+  // Upsert a movement received from Supabase
+  // Conflict resolution: remote wins only if its updated_at is newer
+  Future<void> upsertMovementFromRemote(Map<String, dynamic> remote) async {
+    final d          = await db;
+    final remoteId   = remote['movement_id'] as int;
+    final remoteTs   = remote['updated_at']  as String;
+
+    final existing = await d.query(
+      tMovements,
+      where:     'movement_id = ?',
+      whereArgs: [remoteId],
+      limit:     1,
+    );
+
+    if (existing.isEmpty) {
+      // New record from another device — insert
+      await d.insert(tMovements, {
+        'movement_id':   remoteId,
+        'item_id':       remote['item_id'],
+        'quantity':      remote['quantity'],
+        'from_location': remote['from_location'],
+        'to_location':   remote['to_location'],
+        'staff_id':      remote['staff_id'],
+        'created_at':    remote['created_at'],
+        'updated_at':    remoteTs,
+        'edited':        remote['edited'] == true ? 1 : 0,
+        'edited_by':     remote['edited_by'],
+        'sync_status':   'synced',
+        'remark':        remote['remark'],
+      });
+    } else {
+      // Exists locally — only update if remote is newer (spec section 13)
+      final localTs = existing.first['updated_at'] as String;
+      if (remoteTs.compareTo(localTs) > 0) {
+        await d.update(
+          tMovements,
+          {
+            'quantity':      remote['quantity'],
+            'from_location': remote['from_location'],
+            'to_location':   remote['to_location'],
+            'edited':        remote['edited'] == true ? 1 : 0,
+            'edited_by':     remote['edited_by'],
+            'updated_at':    remoteTs,
+            'sync_status':   'synced',
+            'remark':        remote['remark'],
+          },
+          where:     'movement_id = ?',
+          whereArgs: [remoteId],
+        );
+      }
+      // else: local is newer — keep local, skip remote
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -435,5 +533,28 @@ class DatabaseHelper {
     await databaseFactory.deleteDatabase(path);
     _db = null;
     debugPrint('Database deleted');
+  }
+
+  // Reseed — called when staff table is empty after load
+  // Drops and recreates all tables with correct schema then seeds
+  Future<void> reseed() async {
+    try {
+      final d = await db;
+      await d.transaction((txn) async {
+        // Drop all tables
+        await txn.execute('DROP TABLE IF EXISTS tMovements');
+        await txn.execute('DROP TABLE IF EXISTS tItems');
+        await txn.execute('DROP TABLE IF EXISTS tLocations');
+        await txn.execute('DROP TABLE IF EXISTS tStaff');
+      });
+      // Close and delete DB file so onCreate runs fresh
+      await d.close();
+      _db = null;
+      // Reopen — triggers onCreate which creates tables + seeds
+      await db;
+      debugPrint('DatabaseHelper: reseed complete');
+    } catch (e) {
+      debugPrint('DatabaseHelper.reseed error: \$e');
+    }
   }
 }
