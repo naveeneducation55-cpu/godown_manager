@@ -7,11 +7,10 @@ import '../../providers/app_data_provider.dart';
 
 // Supported units
 const _units = [
-  'pcs','kg','gram','ton','litre','ml','dozen','box','bag','bundle',
+  'pcs','kg','gram','dozen','box','bag','bundle',
 ];
 String _unitDesc(String u) => const {
-  'pcs':'pieces','kg':'kilogram','gram':'gram','ton':'metric ton',
-  'litre':'litre','ml':'millilitre','dozen':'12 pieces',
+  'pcs':'pieces','kg':'kilogram','gram':'gram','dozen':'12 pieces',
   'box':'box','bag':'bag','bundle':'bundle',
 }[u] ?? '';
 
@@ -58,12 +57,12 @@ class _ManageScreenState extends State<ManageScreen>
               unselectedLabelColor: t.text3,
               indicatorColor:      t.primary,
               indicatorWeight:     2,
-              labelStyle: TextStyle(
+              labelStyle: const TextStyle(
                   fontFamily: AppFonts.sans,
                   fontSize:   13,
                   fontWeight: FontWeight.w600),
               unselectedLabelStyle:
-                  TextStyle(fontFamily: AppFonts.sans, fontSize: 13),
+                  const TextStyle(fontFamily: AppFonts.sans, fontSize: 13),
               tabs: const [
                 Tab(text: 'Items'),
                 Tab(text: 'Godowns'),
@@ -283,7 +282,7 @@ class _ItemSheetState extends State<_ItemSheet> {
 
             // Unit
             DropdownButtonFormField<String>(
-              value:         _unit,
+              initialValue:         _unit,
               dropdownColor: t.surface,
               style:         AppFonts.body(color: t.text),
               decoration: InputDecoration(
@@ -321,7 +320,7 @@ class _ItemSheetState extends State<_ItemSheet> {
 
               // Location
               DropdownButtonFormField<LocationModel>(
-                value:         _openingLoc,
+                initialValue:         _openingLoc,
                 dropdownColor: t.surface,
                 style:         AppFonts.body(color: t.text),
                 decoration: InputDecoration(
@@ -370,7 +369,7 @@ class _ItemSheetState extends State<_ItemSheet> {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 7, vertical: 2),
                           decoration: BoxDecoration(
-                            color: t.primary.withOpacity(0.1),
+                            color: t.primary.withValues(alpha: .1),
                             borderRadius: BorderRadius.circular(4),
                           ),
                           child: Text(_unit!,
@@ -663,14 +662,41 @@ class _StaffTabState extends State<_StaffTab> {
         ctx.read<AppDataProvider>().addStaff(name: n, pin: p, role: r),
   );
 
-  void _openEdit(BuildContext ctx, StaffModel s) => _showStaffSheet(
-    context:  ctx,
-    existing: s,
-    onSave: (n, p, r) =>
-        ctx.read<AppDataProvider>().editStaff(id: s.id, name: n, pin: p, role: r),
-  );
+  void _openEdit(BuildContext ctx, StaffModel s) {
+    final data      = ctx.read<AppDataProvider>();
+    final currentId = data.currentStaff?.id;
+
+    // Block editing own role if you are the last admin
+    final adminCount = data.staff.where((x) => x.isAdmin).length;
+    final isLastAdmin = s.isAdmin && adminCount == 1;
+    final isEditingSelf = s.id == currentId;
+
+    _showStaffSheet(
+      context:       ctx,
+      existing:      s,
+      isLastAdmin:   isLastAdmin,
+      isEditingSelf: isEditingSelf,
+      onSave: (n, p, r) =>
+          ctx.read<AppDataProvider>().editStaff(id: s.id, name: n, pin: p, role: r),
+    );
+  }
 
   Future<void> _delete(BuildContext ctx, StaffModel s) async {
+    final data = ctx.read<AppDataProvider>();
+
+    // Block deleting yourself
+    if (s.id == data.currentStaff?.id) {
+      showError(ctx, 'You cannot delete your own account.');
+      return;
+    }
+
+    // Block deleting the last admin
+    final adminCount = data.staff.where((x) => x.isAdmin).length;
+    if (s.isAdmin && adminCount == 1) {
+      showError(ctx, 'Cannot delete the last admin. Assign another admin first.');
+      return;
+    }
+
     final ok = await showDeleteConfirm(ctx, s.name);
     if (ok && ctx.mounted) {
       ctx.read<AppDataProvider>().deleteStaff(s.id);
@@ -732,19 +758,33 @@ void _showStaffSheet({
   required BuildContext context,
   required StaffModel?  existing,
   required void Function(String, String, String) onSave,
+  bool isLastAdmin   = false,
+  bool isEditingSelf = false,
 }) {
   showModalBottomSheet(
     context:            context,
     isScrollControlled: true,
     backgroundColor:    Colors.transparent,
-    builder: (_) => _StaffSheet(existing: existing, onSave: onSave),
+    builder: (_) => _StaffSheet(
+      existing:      existing,
+      onSave:        onSave,
+      isLastAdmin:   isLastAdmin,
+      isEditingSelf: isEditingSelf,
+    ),
   );
 }
 
 class _StaffSheet extends StatefulWidget {
   final StaffModel? existing;
   final void Function(String name, String pin, String role) onSave;
-  const _StaffSheet({required this.existing, required this.onSave});
+  final bool        isLastAdmin;
+  final bool        isEditingSelf;
+  const _StaffSheet({
+    required this.existing,
+    required this.onSave,
+    this.isLastAdmin   = false,
+    this.isEditingSelf = false,
+  });
   @override
   State<_StaffSheet> createState() => _StaffSheetState();
 }
@@ -835,24 +875,60 @@ class _StaffSheetState extends State<_StaffSheet> {
             ),
             const SizedBox(height: AppSpacing.md),
 
-            // Role selector
-            Text('Role', style: AppFonts.label(color: t.text3)),
-            const SizedBox(height: 6),
+            // Role selector — locked if this is the last admin or editing self
             Row(children: [
-              _TypeChip(
-                label:    'Staff',
-                icon:     Icons.person_outline_rounded,
-                selected: _role == 'staff',
-                onTap:    () => setState(() => _role = 'staff'),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              _TypeChip(
-                label:    'Admin',
-                icon:     Icons.admin_panel_settings_outlined,
-                selected: _role == 'admin',
-                onTap:    () => setState(() => _role = 'admin'),
-              ),
+              Text('Role', style: AppFonts.label(color: t.text3)),
+              if (widget.isLastAdmin) ...[ 
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color:        t.warnBg,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    'last admin — locked',
+                    style: AppFonts.monoStyle(size: 9, color: t.warnFg),
+                  ),
+                ),
+              ] else if (widget.isEditingSelf) ...[
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color:        t.infoBg,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    'cannot change own role',
+                    style: AppFonts.monoStyle(size: 9, color: t.infoFg),
+                  ),
+                ),
+              ],
             ]),
+            const SizedBox(height: 6),
+            // Role chips — disabled if last admin or editing self
+            Opacity(
+              opacity: (widget.isLastAdmin || widget.isEditingSelf) ? 0.4 : 1.0,
+              child: IgnorePointer(
+                ignoring: widget.isLastAdmin || widget.isEditingSelf,
+                child: Row(children: [
+                  _TypeChip(
+                    label:    'Staff',
+                    icon:     Icons.person_outline_rounded,
+                    selected: _role == 'staff',
+                    onTap:    () => setState(() => _role = 'staff'),
+                  ),
+                  const SizedBox(width: AppSpacing.sm),
+                  _TypeChip(
+                    label:    'Admin',
+                    icon:     Icons.admin_panel_settings_outlined,
+                    selected: _role == 'admin',
+                    onTap:    () => setState(() => _role = 'admin'),
+                  ),
+                ]),
+              ),
+            ),
 
             const SizedBox(height: AppSpacing.xl),
             PrimaryButton(

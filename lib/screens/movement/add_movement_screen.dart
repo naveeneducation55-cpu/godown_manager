@@ -132,6 +132,29 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
       return;
     }
 
+    // ── Stock validation — cannot transfer more than available ──────────────
+    // Skip for SUPPLIER as from-location (opening stock)
+    if (_selectedFrom!.id != 'SUPPLIER') {
+      final data        = context.read<AppDataProvider>();
+      final stockList   = data.getStock();
+      final stockEntry  = stockList.where((s) =>
+          s.item.id     == _selectedItem!.id &&
+          s.location.id == _selectedFrom!.id,
+      ).toList();
+
+      final available = stockEntry.isEmpty ? 0.0 : stockEntry.first.balance;
+
+      if (qty > available) {
+        showError(
+          context,
+          'Not enough stock. Available: '
+          '${available % 1 == 0 ? available.toInt() : available.toStringAsFixed(1)} '
+          '${_selectedItem!.unit} in ${_selectedFrom!.name}',
+        );
+        return;
+      }
+    }
+
     setState(() => _isSaving = true);
 
     try {

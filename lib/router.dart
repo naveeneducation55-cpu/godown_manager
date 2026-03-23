@@ -7,6 +7,7 @@ import 'screens/history/history_screen.dart';
 import 'screens/items/items_screen.dart';
 import 'screens/sync/sync_screen.dart';
 import 'screens/items/manage_screen.dart';
+import 'screens/movement/add_movement_screen.dart';
 
 class AppRouter {
   static const home    = '/';

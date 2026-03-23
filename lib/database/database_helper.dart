@@ -255,6 +255,19 @@ class DatabaseHelper {
     return data['item_id'] as String;
   }
 
+  // Upsert item received from Supabase
+  Future<void> upsertItemFromRemote(Map<String, dynamic> remote) async {
+    final d = await db;
+    await d.insert(tItems, {
+      'item_id':    remote['item_id']?.toString(),
+      'item_name':  remote['item_name']?.toString(),
+      'unit':       remote['unit']?.toString(),
+      'created_at': remote['created_at']?.toString(),
+      'updated_at': remote['updated_at']?.toString(),
+      'is_deleted': remote['is_deleted'] == true ? 1 : (remote['is_deleted'] as int? ?? 0),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
   Future<void> updateItem(String id, Map<String, dynamic> data) async {
     final d = await db;
     await d.update(tItems, data,
@@ -299,6 +312,19 @@ class DatabaseHelper {
     return data['location_id'] as String;
   }
 
+  // Upsert location received from Supabase
+  Future<void> upsertLocationFromRemote(Map<String, dynamic> remote) async {
+    final d = await db;
+    await d.insert(tLocations, {
+      'location_id':   remote['location_id']?.toString(),
+      'location_name': remote['location_name']?.toString(),
+      'type':          remote['type']?.toString(),
+      'created_at':    remote['created_at']?.toString(),
+      'updated_at':    remote['updated_at']?.toString(),
+      'is_deleted':    remote['is_deleted'] == true ? 1 : (remote['is_deleted'] as int? ?? 0),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
   Future<void> updateLocation(String id, Map<String, dynamic> data) async {
     final d = await db;
     await d.update(tLocations, data,
@@ -330,6 +356,18 @@ class DatabaseHelper {
     final d = await db;
     await d.insert(tStaff, data);
     return data['staff_id'] as String;
+  }
+
+  // Upsert staff received from Supabase
+  Future<void> upsertStaffFromRemote(Map<String, dynamic> remote) async {
+    final d = await db;
+    await d.insert(tStaff, {
+      'staff_id':   remote['staff_id']?.toString(),
+      'staff_name': remote['staff_name']?.toString(),
+      'pin':        remote['pin']?.toString(),
+      'role':       remote['role']?.toString() ?? 'staff',
+      'created_at': remote['created_at']?.toString(),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<void> updateStaff(String id, Map<String, dynamic> data) async {

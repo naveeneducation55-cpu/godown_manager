@@ -441,6 +441,34 @@ class _EditSheetState extends State<_EditSheet> {
     setState(() => _isSaving = true);
 
     final qty = double.tryParse(_qtyCtrl.text.trim()) ?? 0;
+
+    // Stock validation — available stock + original qty of this movement
+    // (since we're editing, the original qty is already "in use" so add it back)
+    if (_fromLoc!.id != 'SUPPLIER') {
+      final stockList  = widget.data.getStock();
+      final stockEntry = stockList.where((s) =>
+          s.item.id     == widget.movement.itemId &&
+          s.location.id == _fromLoc!.id,
+      ).toList();
+      // Available = current balance + original movement qty (it will be replaced)
+      final currentBalance = stockEntry.isEmpty ? 0.0 : stockEntry.first.balance;
+      final originalQty    = widget.movement.fromLocationId == _fromLoc!.id
+          ? widget.movement.quantity
+          : 0.0;
+      final available = currentBalance + originalQty;
+
+      if (qty > available) {
+        final item = widget.data.getItemById(widget.movement.itemId);
+        showError(
+          context,
+          'Not enough stock. Available: '
+          '${available % 1 == 0 ? available.toInt() : available.toStringAsFixed(1)} '
+          '${item?.unit ?? ''} in ${_fromLoc!.name}',
+        );
+        setState(() => _isSaving = false);
+        return;
+      }
+    }
     final ok  = await widget.data.editMovement(
       movementId:     widget.movement.id,
       quantity:       qty,

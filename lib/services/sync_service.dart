@@ -52,7 +52,9 @@ class SyncService {
   // Callback — AppDataProvider registers this to reload data after pull
   void Function(Map<String,dynamic>)? _onRemoteMovement;
   // Callback — called after successful push so provider updates in-memory sync status
-  void Function(List<String> ids)? _onMovementsSynced;
+  void Function(List<String> ids)?    _onMovementsSynced;
+  // Callback — called when items/locations/staff change on another device
+  void Function()?                    _onMasterDataChanged;
 
   // ── Timers ─────────────────────────────────────────────────────────────────
   Timer?               _periodicTimer;
@@ -62,29 +64,35 @@ class SyncService {
   void startAutoSync({
     void Function(Map<String,dynamic>)? onRemoteMovement,
     void Function(List<String> ids)?    onMovementsSynced,
+    void Function()?                    onMasterDataChanged,
   }) {
     if (!AppConfig.isSyncEnabled) {
       debugPrint('SyncService: disabled — keys not configured');
       return;
     }
 
-    _onRemoteMovement  = onRemoteMovement;
-    _onMovementsSynced = onMovementsSynced;
+    _onRemoteMovement    = onRemoteMovement;
+    _onMovementsSynced   = onMovementsSynced;
+    _onMasterDataChanged = onMasterDataChanged;
 
-    // 1. Realtime subscription — instant updates from other devices
+    // 1. Realtime — movements
     SupabaseService.instance.subscribeToMovements(
       onInsert: _handleRemoteMovement,
       onUpdate: _handleRemoteMovement,
     );
 
-    // 2. Periodic sync every 60s — catches missed realtime events
+    // 2. Realtime — items, locations, staff
+    SupabaseService.instance.subscribeToMasterData(
+      onChanged: _handleMasterDataChanged,
+    );
+
+    // 3. Periodic sync every 60s — catches missed realtime events
     _periodicTimer = Timer.periodic(
       const Duration(seconds: 60),
       (_) => sync(silent: true),
     );
 
-    // 3. Sync immediately on network restore
-    // connectivity_plus 5.0.2 on Android emits single ConnectivityResult
+    // 4. Sync immediately on network restore
     _connectivitySub = Connectivity().onConnectivityChanged.listen((result) {
       final online = result != ConnectivityResult.none;
       if (online) {
@@ -93,7 +101,7 @@ class SyncService {
       }
     });
 
-    // 4. Initial sync on startup
+    // 5. Initial sync on startup
     Future.delayed(const Duration(seconds: 3), () => sync(silent: true));
 
     debugPrint('SyncService: started — realtime + periodic(60s)');
@@ -101,6 +109,7 @@ class SyncService {
 
   void stopAutoSync() {
     SupabaseService.instance.unsubscribeFromMovements();
+    SupabaseService.instance.unsubscribeFromMasterData();
     _periodicTimer?.cancel();
     _connectivitySub?.cancel();
     _periodicTimer   = null;
@@ -116,8 +125,6 @@ class SyncService {
   Future<void> _handleRemoteMovement(Map<String,dynamic> row) async {
     try {
       final changed = await DatabaseHelper.instance.upsertMovementFromRemote(row);
-      // Only notify provider if data actually changed — prevents echo loop
-      // when this device's own push comes back via realtime subscription
       if (changed) {
         _onRemoteMovement?.call(row);
         debugPrint('SyncService: realtime movement merged — ${row['movement_id']}');
@@ -127,6 +134,17 @@ class SyncService {
     } catch (e) {
       debugPrint('SyncService._handleRemoteMovement error: $e');
     }
+  }
+
+  // ── Handle realtime master data change from another device ─────────────────
+  // Debounced — multiple rapid changes (e.g. bulk add) fire only one reload
+  Timer? _masterDataDebounce;
+  void _handleMasterDataChanged() {
+    _masterDataDebounce?.cancel();
+    _masterDataDebounce = Timer(const Duration(milliseconds: 500), () {
+      debugPrint('SyncService: master data changed — pulling from Supabase');
+      _pullMasterData().then((_) => _onMasterDataChanged?.call());
+    });
   }
 
   // ── Broadcast status ───────────────────────────────────────────────────────
@@ -219,23 +237,31 @@ class SyncService {
   }
 
   // ── Push master data — items, locations, staff ────────────────────────────
-  // Runs on first sync always, then throttled to once every 5 minutes.
-  // Uses upsert — existing records update, new records insert. Safe to re-run.
+  // Called on first sync and when explicitly triggered by CRUD operations.
+  // NOT called on periodic 60s sync — that only pushes pending movements.
   DateTime? _lastMasterPush;
+  bool      _masterDataDirty = true; // true on startup — ensures first sync pushes
+
+  // Mark master data as needing sync — called after any CRUD on items/locations/staff
+  void markMasterDirty() => _masterDataDirty = true;
 
   Future<void> _pushMasterData() async {
+    // Skip if nothing changed since last push
+    if (!_masterDataDirty) return;
+
     final now = DateTime.now();
+    // Also throttle to max once per minute even if dirty
     if (_lastMasterPush != null &&
-        now.difference(_lastMasterPush!).inMinutes < 5) {
+        now.difference(_lastMasterPush!).inSeconds < 60) {
       return;
     }
 
     try {
-      final db      = DatabaseHelper.instance;
-      // Set timestamp before push — prevents second call within 5 min
-      // even if this call is still in progress
-      _lastMasterPush = now;
+      // Set before push — prevents concurrent calls
+      _lastMasterPush  = now;
+      _masterDataDirty = false;
 
+      final db      = DatabaseHelper.instance;
       final results = await Future.wait([
         db.getAllItems(),
         db.getAllLocations(),
@@ -252,6 +278,8 @@ class SyncService {
 
       debugPrint('SyncService: master data pushed');
     } catch (e) {
+      // Reset dirty flag so it retries next sync
+      _masterDataDirty = true;
       debugPrint('SyncService._pushMasterData: $e');
     }
   }
@@ -260,13 +288,14 @@ class SyncService {
   Future<SyncResult<int>> _pullAndMerge() async {
     try {
       final db    = DatabaseHelper.instance;
-      // Pull since last sync — or last 7 days if never synced
       final since = _lastSyncAt != null
           ? _lastSyncAt!.subtract(const Duration(minutes: 1))
           : DateTime.now().subtract(const Duration(days: 7));
 
-      final result =
-          await SupabaseService.instance.pullMovementsSince(since);
+      // Pull master data (items/locations/staff) on every periodic sync
+      await _pullMasterData();
+
+      final result = await SupabaseService.instance.pullMovementsSince(since);
       if (!result.isSuccess) return SyncResult.err(result.error);
 
       final remote = result.data!;
@@ -287,6 +316,48 @@ class SyncService {
       return SyncResult.ok(merged);
     } catch (e) {
       return SyncResult.err('_pullAndMerge: $e');
+    }
+  }
+
+  // ── Pull items, locations, staff from Supabase → merge into SQLite ─────────
+  Future<void> _pullMasterData() async {
+    try {
+      final since = _lastSyncAt != null
+          ? _lastSyncAt!.subtract(const Duration(minutes: 1))
+          : DateTime.now().subtract(const Duration(days: 7));
+
+      final result = await SupabaseService.instance.pullMasterDataSince(since);
+      if (!result.isSuccess) {
+        debugPrint('SyncService._pullMasterData: ${result.error}');
+        return;
+      }
+
+      final data = result.data!;
+      final db   = DatabaseHelper.instance;
+
+      // Upsert items
+      for (final row in data['items'] ?? []) {
+        await db.upsertItemFromRemote(row);
+      }
+      // Upsert locations
+      for (final row in data['locations'] ?? []) {
+        await db.upsertLocationFromRemote(row);
+      }
+      // Upsert staff
+      for (final row in data['staff'] ?? []) {
+        await db.upsertStaffFromRemote(row);
+      }
+
+      final totalChanged = (data['items']?.length ?? 0) +
+          (data['locations']?.length ?? 0) +
+          (data['staff']?.length ?? 0);
+
+      if (totalChanged > 0) {
+        _onMasterDataChanged?.call();
+        debugPrint('SyncService: pulled master data — $totalChanged records');
+      }
+    } catch (e) {
+      debugPrint('SyncService._pullMasterData error: $e');
     }
   }
 

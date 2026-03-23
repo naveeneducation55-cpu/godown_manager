@@ -72,11 +72,11 @@ class SupabaseService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // REALTIME — subscribe to movements table changes
-  // Callback fires instantly when another device pushes a record
+  // REALTIME — subscribe to all table changes
   // ═══════════════════════════════════════════════════════════════════════════
 
   RealtimeChannel? _movementsChannel;
+  RealtimeChannel? _masterDataChannel;
 
   void subscribeToMovements({
     required void Function(Map<String, dynamic> row) onInsert,
@@ -84,7 +84,6 @@ class SupabaseService {
   }) {
     if (!AppConfig.isSyncEnabled) return;
 
-    // Cancel existing subscription before creating new one
     _movementsChannel?.unsubscribe();
 
     _movementsChannel = _client
@@ -112,9 +111,57 @@ class SupabaseService {
         });
   }
 
+  // Subscribe to items, locations, staff changes
+  // Fires when another device adds/edits/deletes master data
+  void subscribeToMasterData({
+    required void Function() onChanged,
+  }) {
+    if (!AppConfig.isSyncEnabled) return;
+
+    _masterDataChannel?.unsubscribe();
+
+    _masterDataChannel = _client
+        .channel('master_data_changes')
+        .onPostgresChanges(
+          event:  PostgresChangeEvent.all,
+          schema: 'public',
+          table:  'items',
+          callback: (_) {
+            debugPrint('Realtime: items changed');
+            onChanged();
+          },
+        )
+        .onPostgresChanges(
+          event:  PostgresChangeEvent.all,
+          schema: 'public',
+          table:  'locations',
+          callback: (_) {
+            debugPrint('Realtime: locations changed');
+            onChanged();
+          },
+        )
+        .onPostgresChanges(
+          event:  PostgresChangeEvent.all,
+          schema: 'public',
+          table:  'staff',
+          callback: (_) {
+            debugPrint('Realtime: staff changed');
+            onChanged();
+          },
+        )
+        .subscribe((status, [error]) {
+          debugPrint('Realtime master data status: $status ${error ?? ''}');
+        });
+  }
+
   void unsubscribeFromMovements() {
     _movementsChannel?.unsubscribe();
     _movementsChannel = null;
+  }
+
+  void unsubscribeFromMasterData() {
+    _masterDataChannel?.unsubscribe();
+    _masterDataChannel = null;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -122,7 +169,6 @@ class SupabaseService {
   // ═══════════════════════════════════════════════════════════════════════════
 
   // Pull movements updated after a given timestamp
-  // Avoids downloading entire table on every sync
   Future<SyncResult<List<Map<String,dynamic>>>> pullMovementsSince(
     DateTime since,
   ) async {
@@ -136,6 +182,27 @@ class SupabaseService {
       return SyncResult.ok(List<Map<String,dynamic>>.from(data));
     } catch (e) {
       return SyncResult.err('pullMovementsSince: $e');
+    }
+  }
+
+  // Pull items/locations/staff updated after a given timestamp
+  Future<SyncResult<Map<String, List<Map<String,dynamic>>>>> pullMasterDataSince(
+    DateTime since,
+  ) async {
+    try {
+      final sinceStr = since.toIso8601String();
+      final results  = await Future.wait([
+        _client.from('items')    .select().gte('updated_at', sinceStr).timeout(const Duration(seconds: 10)),
+        _client.from('locations').select().gte('updated_at', sinceStr).timeout(const Duration(seconds: 10)),
+        _client.from('staff')    .select().timeout(const Duration(seconds: 10)),
+      ]);
+      return SyncResult.ok({
+        'items':     List<Map<String,dynamic>>.from(results[0]),
+        'locations': List<Map<String,dynamic>>.from(results[1]),
+        'staff':     List<Map<String,dynamic>>.from(results[2]),
+      });
+    } catch (e) {
+      return SyncResult.err('pullMasterDataSince: $e');
     }
   }
 
