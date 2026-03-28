@@ -80,19 +80,11 @@ class SupabaseService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-<<<<<<< Updated upstream
-  // REALTIME — subscribe to movements table changes
-  // Callback fires instantly when another device pushes a record
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  RealtimeChannel? _movementsChannel;
-=======
   // REALTIME — single channel for all table changes
   // Checkpoint 2: Merged 2 channels into 1 — halves websocket connections
   // ═══════════════════════════════════════════════════════════════════════════
 
   RealtimeChannel? _channel;
->>>>>>> Stashed changes
 
   void subscribeToAll({
     required void Function(Map<String, dynamic> row) onMovementInsert,
@@ -101,12 +93,7 @@ class SupabaseService {
   }) {
     if (!AppConfig.isSyncEnabled) return;
 
-<<<<<<< Updated upstream
-    // Cancel existing subscription before creating new one
-    _movementsChannel?.unsubscribe();
-=======
     _channel?.unsubscribe();
->>>>>>> Stashed changes
 
     _channel = _client
         .channel('all_changes')
@@ -129,8 +116,6 @@ class SupabaseService {
             onMovementUpdate(Map<String, dynamic>.from(payload.newRecord));
           },
         )
-<<<<<<< Updated upstream
-=======
         // Master data — any change
         .onPostgresChanges(
           event:  PostgresChangeEvent.all,
@@ -159,19 +144,11 @@ class SupabaseService {
             onMasterDataChanged();
           },
         )
->>>>>>> Stashed changes
         .subscribe((status, [error]) {
           debugPrint('Realtime status: $status ${error ?? ''}');
         });
   }
 
-<<<<<<< Updated upstream
-  void unsubscribeFromMovements() {
-    _movementsChannel?.unsubscribe();
-    _movementsChannel = null;
-  }
-
-=======
   // Legacy methods — kept for backward compat, delegate to subscribeToAll
   void subscribeToMovements({
     required void Function(Map<String, dynamic> row) onInsert,
@@ -197,13 +174,11 @@ class SupabaseService {
   void unsubscribeFromMovements() => unsubscribeAll();
   void unsubscribeFromMasterData() {}  // no-op, single channel handles all
 
->>>>>>> Stashed changes
   // ═══════════════════════════════════════════════════════════════════════════
   // PULL — fetch from Supabase → merge into SQLite
   // ═══════════════════════════════════════════════════════════════════════════
 
   // Pull movements updated after a given timestamp
-  // Avoids downloading entire table on every sync
   Future<SyncResult<List<Map<String,dynamic>>>> pullMovementsSince(
     DateTime since,
   ) async {
@@ -220,8 +195,6 @@ class SupabaseService {
     }
   }
 
-<<<<<<< Updated upstream
-=======
   // Pull items/locations/staff updated after a given timestamp
   // Checkpoint 2: staff table has no updated_at — pull all staff but it's
   // a tiny table (3-10 rows). Items and locations filter by updated_at.
@@ -269,7 +242,6 @@ class SupabaseService {
   }
 
   // Legacy pull methods — kept for backward compat
->>>>>>> Stashed changes
   Future<SyncResult<List<Map<String,dynamic>>>> pullItems() async {
     try {
       final data = await _client

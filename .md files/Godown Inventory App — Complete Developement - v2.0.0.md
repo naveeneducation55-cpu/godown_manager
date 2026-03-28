@@ -894,6 +894,111 @@ We don't store location on the item record — we derive it from movements. Ever
 
 ---
 
+### Bug 17 — `is_deleted` Bool/Int Cast Crash on Fresh Install
+**Severity:** Critical · **Phase:** Checkpoint 3
+
+#### What happened
+```
+SyncService.firstSyncFromRemote error:
+type 'bool' is not a subtype of type 'int?' in type cast
+DatabaseHelper.upsertItemFromRemote (database_helper.dart:268)
+```
+Fresh install would reach Supabase, pull data successfully, then crash while writing items to SQLite. Returned `unreachable`. Retried 20 times. Showed error screen. Real data never loaded.
+
+#### Root cause
+```dart
+'is_deleted': remote['is_deleted'] == true ? 1 : (remote['is_deleted'] as int? ?? 0),
+```
+Supabase stores `is_deleted` as PostgreSQL `boolean` → arrives in Dart as `bool` (`false`). SQLite stores it as `INTEGER`. The cast `as int?` on a `bool` value throws at runtime. Same problem in `upsertLocationFromRemote`.
+
+#### Solution
+```dart
+'is_deleted': (remote['is_deleted'] == true || remote['is_deleted'] == 1) ? 1 : 0,
+```
+Handles both cases — Supabase `bool` and SQLite `int`. No cast. Applied to `upsertItemFromRemote` and `upsertLocationFromRemote`.
+
+#### The lesson
+This is a type boundary problem — the place where PostgreSQL booleans meet Dart meet SQLite integers. Never use `as TypeName` when reading from external APIs. Always use explicit comparison with fallback.
+
+---
+
+### Bug 18 — Release APK Shows Blank/White Screen
+**Severity:** Critical · **Phase:** Distribution
+
+#### What happened
+Debug APK via USB worked perfectly. Release APK sent via WhatsApp showed a completely blank white screen on other phones. No crash, no error visible to the user.
+
+#### Root cause — Two separate issues discovered
+
+**Issue 1 — Wrong assumption:** Initially suspected the APK was crashing. Connected the phone via USB and ran `adb logcat | Select-String "flutter"`. Logs showed the app was running, loading screen was working, but:
+```
+Failed host lookup: 'jbkbwqprwbkqoduwghjp.supabase.co'
+errno = 7 — No address associated with hostname
+```
+20 retries, all failed → error screen shown. Not a white screen crash — it was the loading/error screen working correctly but taking 100 seconds (20 × 5s).
+
+**Issue 2 — Missing INTERNET permission in AndroidManifest.xml:** The real root cause. `android/app/src/main/AndroidManifest.xml` had no INTERNET permission:
+```xml
+<!-- This was missing -->
+<uses-permission android:name="android.permission.INTERNET"/>
+```
+
+#### Why debug worked but release didn't
+Flutter's debug builds automatically merge `android/app/src/debug/AndroidManifest.xml` which Flutter injects INTERNET permission into for development convenience. Release builds only use `src/main/AndroidManifest.xml` — no automatic injection. Android silently blocks all DNS lookups rather than throwing a "permission denied" error, which manifests as `Failed host lookup` — the same error as having no internet at all.
+
+#### Solution
+Added to `android/app/src/main/AndroidManifest.xml`:
+```xml
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <application
+        ...
+```
+
+Rebuilt release APK → installed → connected to Supabase on first attempt.
+
+#### Does SQLite need storage permission?
+No. `sqflite` uses the app's internal private storage at `/data/data/com.package.name/`. Android permissions are only required for shared external storage (Downloads, SD card). Internal app storage is always accessible without any permission.
+
+#### Interview talking point
+> *"What's different between debug and release APKs in Flutter?"*
+
+Several things: debug uses JIT compilation (slower, enables hot reload), release uses AOT (faster, smaller). Debug builds automatically inject the INTERNET permission and enable debugging tools. Release builds are stripped of debug symbols and only include what's explicitly declared. The most common gotcha: INTERNET permission works in debug because Flutter injects it, but the release APK can't reach the network until you add it to the main manifest yourself. `debugPrint()` statements are completely silent in release — no performance impact, no output.
+
+---
+
+### Bug 19 — Splash/Loading Screen Showing on Every Launch
+**Severity:** Medium · **Phase:** Checkpoint 3
+
+#### What happened
+Loading screen condition in `main.dart`:
+```dart
+if (data.isLoading || (!data.syncFailed && data.staff.isEmpty))
+```
+On existing devices (not fresh install), SQLite already has data. `data.staff.isEmpty` is briefly `true` while `_loadAll()` runs. This caused a flash of the loading screen on every app launch even when data was already present.
+
+#### Solution
+`data.isLoading` covers the loading period correctly. The `data.staff.isEmpty` condition is only needed for fresh install detection which is already handled inside `_handleFreshInstall()`. The loading screen shows only while `isLoading = true` — which is set to `false` in the `finally` block of `initialize()` after all data is loaded.
+
+---
+
+## Current Working State (Checkpoint 3 — March 2026)
+
+```
+✅ Fresh install: connects to Supabase, loads real data, shows login
+✅ Existing install: loads SQLite instantly, shows login  
+✅ Realtime sync: movements appear on all devices in < 1 second
+✅ Stock calculation: derived from movements, always correct
+✅ Offline mode: works without internet, syncs when reconnected
+✅ Loading screen: blue branded screen with GI logo + retry dots
+✅ Error screen: shown after 20 failed retries with Retry button
+✅ Release APK: builds and distributes correctly via WhatsApp
+✅ INTERNET permission: added to AndroidManifest.xml
+✅ Dropdown crash: fixed — stale references re-resolved on every build
+```
+
+---
+
 ## Tech Stack Reference
 
 ```yaml
@@ -925,4 +1030,4 @@ shared_preferences: 2.5.4   # Login persistence (staff ID)
 
 *Document version: Checkpoint 3 — March 2026*
 *App version: v1.0.0 — Single shop · 7 devices · Offline-first*
-*Last updated: Bug 16 (dropdown stale reference crash) added*
+*Last updated: Bugs 17-19 added · INTERNET permission fix · Release APK working*
