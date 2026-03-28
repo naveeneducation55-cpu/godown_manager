@@ -3,18 +3,8 @@
 //
 // Checkpoint 3 change (THE fix for duplicate/hardcoded data):
 //   • _seedData() call REMOVED from _onCreate()
-//     Before: every fresh install auto-seeded hardcoded data, then
-//             AppDataProvider pulled Supabase on top → duplicates
-//     Now:    _onCreate() only creates empty tables + indexes
-//             Seeding only happens via seedData() called explicitly by
-//             AppDataProvider._seedAndLoad() when Supabase is confirmed
-//             empty (SyncFirstResult.supabaseEmpty = first device ever)
-//   • _seedData() renamed to seedData() — now public so AppDataProvider
-//     can call it directly without going through reseed()
-//
-// Checkpoint 2 changes (retained):
-//   • reseed() uses $tMovements not literal 'tMovements'
-//   • deleteDatabase() uses databaseFactory consistently
+//   • seedData() renamed public — called by AppDataProvider._seedAndLoad()
+//     only when Supabase is confirmed empty (first device ever)
 // ─────────────────────────────────────────────────────────────────────────────
 
 import 'package:sqflite/sqflite.dart';
@@ -24,7 +14,6 @@ import '../utils/id_generator.dart';
 
 class DatabaseHelper {
 
-  // ── Singleton ──────────────────────────────────────────────────────────────
   DatabaseHelper._();
   static final DatabaseHelper instance = DatabaseHelper._();
 
@@ -33,13 +22,11 @@ class DatabaseHelper {
   static const _dbName    = 'godown_inventory.db';
   static const _dbVersion = 1;
 
-  // ── Table names ────────────────────────────────────────────────────────────
   static const tItems     = 'items';
   static const tLocations = 'locations';
   static const tStaff     = 'staff';
   static const tMovements = 'movements';
 
-  // ── Get or create DB ───────────────────────────────────────────────────────
   Future<Database> get db async {
     _db ??= await _initDb();
     return _db!;
@@ -48,17 +35,10 @@ class DatabaseHelper {
   Future<Database> _initDb() async {
     final dbPath = await getDatabasesPath();
     final path   = join(dbPath, _dbName);
-    return openDatabase(
-      path,
-      version:  _dbVersion,
-      onCreate: _onCreate,
-    );
+    return openDatabase(path, version: _dbVersion, onCreate: _onCreate);
   }
 
-  // ── Create tables ONLY — no seed data ─────────────────────────────────────
-  // Checkpoint 3: seedData() removed from here.
-  // AppDataProvider._handleFreshInstall() decides whether to seed
-  // based on Supabase state — only seeds when Supabase is genuinely empty.
+  // Creates empty tables only — no seed data
   Future<void> _onCreate(Database db, int version) async {
     await db.transaction((txn) async {
 
@@ -113,24 +93,16 @@ class DatabaseHelper {
         )
       ''');
 
-      await txn.execute(
-        'CREATE INDEX idx_movements_item_id ON $tMovements(item_id)');
-      await txn.execute(
-        'CREATE INDEX idx_movements_from ON $tMovements(from_location)');
-      await txn.execute(
-        'CREATE INDEX idx_movements_to ON $tMovements(to_location)');
-      await txn.execute(
-        'CREATE INDEX idx_movements_created ON $tMovements(created_at)');
+      await txn.execute('CREATE INDEX idx_movements_item_id ON $tMovements(item_id)');
+      await txn.execute('CREATE INDEX idx_movements_from ON $tMovements(from_location)');
+      await txn.execute('CREATE INDEX idx_movements_to ON $tMovements(to_location)');
+      await txn.execute('CREATE INDEX idx_movements_created ON $tMovements(created_at)');
     });
 
     debugPrint('DatabaseHelper: tables created — empty, no seed');
-    // NO seedData() call here — AppDataProvider controls seeding
   }
 
-  // ── Public seed — called ONLY when Supabase is confirmed empty ─────────────
-  // Renamed from _seedData() to seedData() so AppDataProvider can call
-  // it directly. Only triggered when firstSyncFromRemote() returns
-  // SyncFirstResult.supabaseEmpty (first device ever, Supabase has no rows).
+  // Public seed — called ONLY when Supabase is confirmed empty (first device ever)
   Future<void> seedData() async {
     final d     = await db;
     final idGen = IdGenerator.instance;
@@ -239,11 +211,7 @@ class DatabaseHelper {
 
   Future<List<Map<String, dynamic>>> getItems() async {
     final d = await db;
-    return d.query(tItems,
-      where:     'is_deleted = ?',
-      whereArgs: [0],
-      orderBy:   'item_name ASC',
-    );
+    return d.query(tItems, where: 'is_deleted = ?', whereArgs: [0], orderBy: 'item_name ASC');
   }
 
   Future<List<Map<String, dynamic>>> getAllItems() async {
@@ -251,16 +219,13 @@ class DatabaseHelper {
     return d.query(tItems, orderBy: 'item_name ASC');
   }
 
-
   Future<String> insertItem(Map<String, dynamic> data) async {
     final d = await db;
     await d.insert(tItems, data);
     return data['item_id'] as String;
   }
 
-<<<<<<< Updated upstream
-=======
-   Future<void> upsertItemFromRemote(Map<String, dynamic> remote) async {
+  Future<void> upsertItemFromRemote(Map<String, dynamic> remote) async {
     final d = await db;
     await d.insert(tItems, {
       'item_id':    remote['item_id']?.toString(),
@@ -272,23 +237,16 @@ class DatabaseHelper {
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
->>>>>>> Stashed changes
   Future<void> updateItem(String id, Map<String, dynamic> data) async {
     final d = await db;
-    await d.update(tItems, data,
-      where:     'item_id = ?',
-      whereArgs: [id],
-    );
+    await d.update(tItems, data, where: 'item_id = ?', whereArgs: [id]);
   }
 
   Future<void> softDeleteItem(String id) async {
     final d   = await db;
     final now = DateTime.now().toIso8601String();
-    await d.update(tItems,
-      {'is_deleted': 1, 'updated_at': now},
-      where:     'item_id = ?',
-      whereArgs: [id],
-    );
+    await d.update(tItems, {'is_deleted': 1, 'updated_at': now},
+        where: 'item_id = ?', whereArgs: [id]);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -297,11 +255,7 @@ class DatabaseHelper {
 
   Future<List<Map<String, dynamic>>> getLocations() async {
     final d = await db;
-    return d.query(tLocations,
-      where:     'is_deleted = ?',
-      whereArgs: [0],
-      orderBy:   'location_name ASC',
-    );
+    return d.query(tLocations, where: 'is_deleted = ?', whereArgs: [0], orderBy: 'location_name ASC');
   }
 
   Future<List<Map<String, dynamic>>> getAllLocations() async {
@@ -315,8 +269,6 @@ class DatabaseHelper {
     return data['location_id'] as String;
   }
 
-<<<<<<< Updated upstream
-=======
   Future<void> upsertLocationFromRemote(Map<String, dynamic> remote) async {
     final d = await db;
     await d.insert(tLocations, {
@@ -325,27 +277,20 @@ class DatabaseHelper {
       'type':          remote['type']?.toString(),
       'created_at':    remote['created_at']?.toString(),
       'updated_at':    remote['updated_at']?.toString(),
-      'is_deleted': (remote['is_deleted'] == true || remote['is_deleted'] == 1) ? 1 : 0,
+      'is_deleted':    (remote['is_deleted'] == true || remote['is_deleted'] == 1) ? 1 : 0,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
->>>>>>> Stashed changes
   Future<void> updateLocation(String id, Map<String, dynamic> data) async {
     final d = await db;
-    await d.update(tLocations, data,
-      where:     'location_id = ?',
-      whereArgs: [id],
-    );
+    await d.update(tLocations, data, where: 'location_id = ?', whereArgs: [id]);
   }
 
   Future<void> softDeleteLocation(String id) async {
     final d   = await db;
     final now = DateTime.now().toIso8601String();
-    await d.update(tLocations,
-      {'is_deleted': 1, 'updated_at': now},
-      where:     'location_id = ?',
-      whereArgs: [id],
-    );
+    await d.update(tLocations, {'is_deleted': 1, 'updated_at': now},
+        where: 'location_id = ?', whereArgs: [id]);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -363,8 +308,6 @@ class DatabaseHelper {
     return data['staff_id'] as String;
   }
 
-<<<<<<< Updated upstream
-=======
   Future<void> upsertStaffFromRemote(Map<String, dynamic> remote) async {
     final d = await db;
     await d.insert(tStaff, {
@@ -376,38 +319,23 @@ class DatabaseHelper {
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
->>>>>>> Stashed changes
   Future<void> updateStaff(String id, Map<String, dynamic> data) async {
     final d = await db;
-    await d.update(tStaff, data,
-      where:     'staff_id = ?',
-      whereArgs: [id],
-    );
+    await d.update(tStaff, data, where: 'staff_id = ?', whereArgs: [id]);
   }
 
   Future<void> deleteStaff(String id) async {
     final d = await db;
-    await d.delete(tStaff,
-      where:     'staff_id = ?',
-      whereArgs: [id],
-    );
+    await d.delete(tStaff, where: 'staff_id = ?', whereArgs: [id]);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // MOVEMENTS CRUD
   // ═══════════════════════════════════════════════════════════════════════════
 
-  Future<List<Map<String, dynamic>>> getMovements({
-    int limit  = 200,
-    int offset = 0,
-  }) async {
+  Future<List<Map<String, dynamic>>> getMovements({int limit = 200, int offset = 0}) async {
     final d = await db;
-    return d.query(
-      tMovements,
-      orderBy: 'created_at DESC',
-      limit:   limit,
-      offset:  offset,
-    );
+    return d.query(tMovements, orderBy: 'created_at DESC', limit: limit, offset: offset);
   }
 
   Future<int> getMovementCount() async {
@@ -419,8 +347,7 @@ class DatabaseHelper {
   Future<int> getPendingCount() async {
     final d      = await db;
     final result = await d.rawQuery(
-      "SELECT COUNT(*) AS cnt FROM $tMovements WHERE sync_status = 'pending'"
-    );
+        "SELECT COUNT(*) AS cnt FROM $tMovements WHERE sync_status = 'pending'");
     return (result.first['cnt'] as int?) ?? 0;
   }
 
@@ -432,20 +359,14 @@ class DatabaseHelper {
 
   Future<void> updateMovement(String id, Map<String, dynamic> data) async {
     final d = await db;
-    await d.update(tMovements, data,
-      where:     'movement_id = ?',
-      whereArgs: [id],
-    );
+    await d.update(tMovements, data, where: 'movement_id = ?', whereArgs: [id]);
   }
 
   Future<void> markAllSynced() async {
     final d   = await db;
     final now = DateTime.now().toIso8601String();
-    await d.update(tMovements,
-      {'sync_status': 'synced', 'updated_at': now},
-      where:     'sync_status = ?',
-      whereArgs: ['pending'],
-    );
+    await d.update(tMovements, {'sync_status': 'synced', 'updated_at': now},
+        where: 'sync_status = ?', whereArgs: ['pending']);
   }
 
   Future<void> markMovementsSynced(List<String> ids) async {
@@ -462,12 +383,8 @@ class DatabaseHelper {
 
   Future<List<Map<String, dynamic>>> getPendingMovements() async {
     final d = await db;
-    return d.query(
-      tMovements,
-      where:     'sync_status = ?',
-      whereArgs: ['pending'],
-      orderBy:   'created_at ASC',
-    );
+    return d.query(tMovements,
+        where: 'sync_status = ?', whereArgs: ['pending'], orderBy: 'created_at ASC');
   }
 
   Future<bool> upsertMovementFromRemote(Map<String, dynamic> remote) async {
@@ -475,12 +392,8 @@ class DatabaseHelper {
     final remoteId = remote['movement_id'].toString();
     final remoteTs = remote['updated_at']?.toString() ?? '';
 
-    final existing = await d.query(
-      tMovements,
-      where:     'movement_id = ?',
-      whereArgs: [remoteId],
-      limit:     1,
-    );
+    final existing = await d.query(tMovements,
+        where: 'movement_id = ?', whereArgs: [remoteId], limit: 1);
 
     if (existing.isEmpty) {
       await d.insert(tMovements, {
@@ -501,21 +414,16 @@ class DatabaseHelper {
     } else {
       final localTs = existing.first['updated_at'] as String;
       if (remoteTs.compareTo(localTs) > 0) {
-        await d.update(
-          tMovements,
-          {
-            'quantity':      remote['quantity'],
-            'from_location': remote['from_location']?.toString(),
-            'to_location':   remote['to_location']?.toString(),
-            'edited':        remote['edited'] == true ? 1 : 0,
-            'edited_by':     remote['edited_by']?.toString(),
-            'updated_at':    remoteTs,
-            'sync_status':   'synced',
-            'remark':        remote['remark'],
-          },
-          where:     'movement_id = ?',
-          whereArgs: [remoteId],
-        );
+        await d.update(tMovements, {
+          'quantity':      remote['quantity'],
+          'from_location': remote['from_location']?.toString(),
+          'to_location':   remote['to_location']?.toString(),
+          'edited':        remote['edited'] == true ? 1 : 0,
+          'edited_by':     remote['edited_by']?.toString(),
+          'updated_at':    remoteTs,
+          'sync_status':   'synced',
+          'remark':        remote['remark'],
+        }, where: 'movement_id = ?', whereArgs: [remoteId]);
         return true;
       }
       return false;
@@ -530,12 +438,8 @@ class DatabaseHelper {
     final d = await db;
     return d.rawQuery('''
       SELECT
-        i.item_id,
-        i.item_name,
-        i.unit,
-        l.location_id,
-        l.location_name,
-        l.type AS location_type,
+        i.item_id, i.item_name, i.unit,
+        l.location_id, l.location_name, l.type AS location_type,
         COALESCE(SUM(CASE WHEN m.to_location   = l.location_id THEN m.quantity ELSE 0 END), 0) AS incoming,
         COALESCE(SUM(CASE WHEN m.from_location = l.location_id AND m.from_location != 'SUPPLIER' THEN m.quantity ELSE 0 END), 0) AS outgoing
       FROM $tItems i
@@ -554,10 +458,7 @@ class DatabaseHelper {
 
   Future<void> close() async {
     final d = _db;
-    if (d != null) {
-      await d.close();
-      _db = null;
-    }
+    if (d != null) { await d.close(); _db = null; }
   }
 
   Future<void> deleteDatabase() async {
@@ -568,9 +469,6 @@ class DatabaseHelper {
     debugPrint('Database deleted');
   }
 
-  // reseed() — drops all tables and recreates them empty (no seed data)
-  // Now only used if database needs a full reset.
-  // After reseed(), AppDataProvider calls seedData() separately if needed.
   Future<void> reseed() async {
     try {
       final d = await db;
@@ -582,7 +480,7 @@ class DatabaseHelper {
       });
       await d.close();
       _db = null;
-      await db; // triggers _onCreate → creates empty tables, no seed
+      await db;
       debugPrint('DatabaseHelper: reseed complete (tables empty)');
     } catch (e) {
       debugPrint('DatabaseHelper.reseed error: $e');
