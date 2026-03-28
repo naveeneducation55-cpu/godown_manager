@@ -463,11 +463,27 @@ class _EditSheetState extends State<_EditSheet> {
   }
 
   @override
-  Widget build(BuildContext context) {
+ Widget build(BuildContext context) {
     final t         = context.appTheme;
     final bot       = MediaQuery.of(context).viewInsets.bottom;
     final locations = widget.data.locations;
     final item      = widget.data.getItemById(widget.movement.itemId);
+
+    // Re-resolve from live list by ID on every build.
+    // After realtime sync, locations list rebuilds with new object instances.
+    // Dropdown compares by == (object identity) — stale reference = crash.
+    final fromId = _fromLoc?.id;
+    final toId   = _toLoc?.id;
+    if (fromId != null) {
+      final fresh = locations.firstWhere(
+        (l) => l.id == fromId, orElse: () => _fromLoc!);
+      if (!identical(fresh, _fromLoc)) _fromLoc = fresh;
+    }
+    if (toId != null) {
+      final fresh = locations.firstWhere(
+        (l) => l.id == toId, orElse: () => _toLoc!);
+      if (!identical(fresh, _toLoc)) _toLoc = fresh;
+    }
 
     return Container(
       decoration: BoxDecoration(
@@ -558,7 +574,7 @@ class _EditSheetState extends State<_EditSheet> {
 
             // From location
             DropdownButtonFormField<LocationModel>(
-              value:         _fromLoc,
+              initialValue: locations.any((l) => l.id == _fromLoc?.id) ? _fromLoc : null,
               dropdownColor: t.surface,
               style:         AppFonts.body(color: t.text),
               decoration: InputDecoration(

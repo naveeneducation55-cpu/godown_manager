@@ -1,25 +1,21 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// app_data_provider.dart  —  Phase 2  (Performance optimised)
+// app_data_provider.dart — Checkpoint 3
 //
-// Optimisations applied:
-//   P1. Stock cache        — computed once, invalidated only on mutation
-//   P2. compute() isolate  — model parsing off main thread on startup
-//   P3. Debounced notify   — batches rapid consecutive notifyListeners calls
-//   P4. SQL stock query    — O(1) indexed SQL instead of O(n³) Dart loop
-//   P5. Sorted cache       — sortedMovements cached, invalidated on change
-//   P6. context.select()   — screens subscribe to slices, not full provider
-//
-// Threading model:
-//   • sqflite runs all queries on a background thread automatically
-//   • compute() spawns a fresh Dart isolate for CPU-heavy parsing
-//   • Main isolate only does: memory reads, UI logic, _notify()
-//   • No manual thread management needed — Dart handles isolate lifecycle
-//
-// Error handling:
-//   • Every async method wrapped in try/catch
-//   • DB errors → log + return safe empty/false value, never crash UI
-//   • _disposed guard — no notify after widget tree teardown
-//   • All getById() return nullable — callers use ?? fallback
+// Checkpoint 3 fixes:
+//   • _seedAndLoad() now calls db.seedData() directly instead of db.reseed()
+//     reseed() drops+recreates tables then _onCreate() runs — but _onCreate()
+//     no longer seeds, so reseed() alone leaves an empty DB.
+//     seedData() writes directly into existing empty tables — correct.
+//   • startRealtimeSync() passes onStockInvalidated to SyncService
+//     → stock cache refreshed instantly when another device pushes a movement
+//   • mergeRemoteMovement() calls _refreshStockCache() after every merge
+//     → stock screen updates in real time across all devices
+//   • _normaliseRemoteRow() uses .toString() on all fields
+//     → no more silent parse crash from Supabase column type mismatches
+//   • _handleFreshInstall() uses SyncFirstResult enum
+//     → supabaseEmpty seeds locally; unreachable retries 8x; never seeds on fail
+//   • _refreshStockCache() calls _notify() after update
+//     → stock screen widget rebuilds automatically
 // ─────────────────────────────────────────────────────────────────────────────
 
 import 'dart:async';
@@ -42,7 +38,7 @@ class ItemModel {
   DateTime       updatedAt;
 
   ItemModel({
-    required this.id,  // e.g. ITM-00001-20260321-0900
+    required this.id,
     required this.name,
     required this.unit,
     this.isDeleted = false,
@@ -95,7 +91,7 @@ class StaffModel {
   final DateTime createdAt;
 
   StaffModel({
-    required this.id,  // e.g. STF-00001-20260321-0900
+    required this.id,
     required this.name,
     required this.pin,
     this.role = 'staff',
@@ -114,7 +110,7 @@ class StaffModel {
 }
 
 class MovementModel {
-  final String   id;            // e.g. MOV-00001-20260321-1040
+  final String   id;
   final String   itemId;
   String         fromLocationId;
   String         toLocationId;
@@ -175,23 +171,17 @@ class StockBalance {
   });
 }
 
-// ─── compute() helpers — must be top-level functions (isolate requirement) ───
-// Each runs in a separate Dart isolate — zero main thread work
+// ─── compute() top-level helpers ─────────────────────────────────────────────
 
 List<ItemModel>     _parseItems    (List<Map<String,dynamic>> rows) =>
     rows.map(ItemModel.fromMap).toList();
-
 List<LocationModel> _parseLocations(List<Map<String,dynamic>> rows) =>
     rows.map(LocationModel.fromMap).toList();
-
 List<StaffModel>    _parseStaff    (List<Map<String,dynamic>> rows) =>
     rows.map(StaffModel.fromMap).toList();
-
 List<MovementModel> _parseMovements(List<Map<String,dynamic>> rows) =>
     rows.map(MovementModel.fromMap).toList();
 
-// Stock calculation — runs in isolate, takes snapshot of movements
-// Input: serialised data (isolates cannot share objects)
 List<StockBalance> _calcStock(_StockInput input) {
   final result = <StockBalance>[];
   for (final loc in input.locations) {
@@ -200,7 +190,7 @@ List<StockBalance> _calcStock(_StockInput input) {
       for (final m in input.movements) {
         if (m.itemId != item.id) continue;
         if (m.toLocationId   == loc.id) incoming += m.quantity;
-        if (m.fromLocationId == loc.id) outgoing += m.quantity;
+        if (m.fromLocationId == loc.id && m.fromLocationId != 'SUPPLIER') outgoing += m.quantity;
       }
       if (incoming > 0 || outgoing > 0) {
         result.add(StockBalance(
@@ -213,7 +203,6 @@ List<StockBalance> _calcStock(_StockInput input) {
   return result;
 }
 
-// Wrapper to pass multiple args to compute()
 class _StockInput {
   final List<ItemModel>     items;
   final List<LocationModel> locations;
@@ -227,7 +216,6 @@ class _StockInput {
 
 class AppDataProvider extends ChangeNotifier {
 
-  // ── In-memory cache ────────────────────────────────────────────────────────
   final List<ItemModel>     _items     = [];
   final List<LocationModel> _locations = [];
   final List<StaffModel>    _staff     = [];
@@ -237,33 +225,44 @@ class AppDataProvider extends ChangeNotifier {
   bool        _disposed  = false;
   bool        _isLoading = true;
 
-  // ── P1: Stock cache ────────────────────────────────────────────────────────
+  // Retry state
+  bool   _syncFailed    = false;
+  int    _retryAttempt  = 0;
+  String _retryMessage  = 'Loading data...';
+  static const _maxRetries    = 20;
+  static const _retryDelaySec = 5;
+
+  // Stock cache
   List<StockBalance>? _stockCache;
   bool                _stockDirty = true;
 
-  // ── P5: Sorted movements cache ─────────────────────────────────────────────
+  // Sorted movements cache
   List<MovementModel>? _sortedCache;
   bool                 _sortedDirty = true;
 
-  // ── P3: Debounce timer ─────────────────────────────────────────────────────
   Timer? _notifyTimer;
 
-  // ── Public getters ─────────────────────────────────────────────────────────
+  // ── Getters ────────────────────────────────────────────────────────────────
   List<ItemModel>     get items     => _items.where((i) => !i.isDeleted).toList();
   List<LocationModel> get locations => _locations.where((l) => !l.isDeleted).toList();
   List<StaffModel>    get staff     => List.unmodifiable(_staff);
-  StaffModel?         get currentStaff    => _currentStaff;
-  bool                get isLoggedIn      => _currentStaff != null;
-  bool                get isAdmin         => _currentStaff?.isAdmin ?? false;
-  bool                get isLoading       => _isLoading;
-  int                 get totalMovements  => _movements.length;
+  StaffModel?         get currentStaff   => _currentStaff;
+  bool                get isLoggedIn     => _currentStaff != null;
+  bool                get isAdmin        => _currentStaff?.isAdmin ?? false;
+  bool                get isLoading      => _isLoading;
+  int                 get totalMovements => _movements.length;
 
-  int get pendingSyncCount =>
-      _movements.where((m) => m.syncStatus == 'pending').length;
-  int get syncedCount =>
-      _movements.where((m) => m.syncStatus == 'synced').length;
+  bool   get syncFailed   => _syncFailed;
+  int    get retryAttempt => _retryAttempt;
+  int    get maxRetries   => _maxRetries;
+  String get retryMessage => _retryMessage;
 
-  // P5: sorted cache — avoids re-sorting on every build
+  List<ItemModel>     get allItems     => List.unmodifiable(_items);
+  List<LocationModel> get allLocations => List.unmodifiable(_locations);
+
+  int get pendingSyncCount => _movements.where((m) => m.syncStatus == 'pending').length;
+  int get syncedCount      => _movements.where((m) => m.syncStatus == 'synced').length;
+
   List<MovementModel> get sortedMovements {
     if (!_sortedDirty && _sortedCache != null) return _sortedCache!;
     _sortedCache = List<MovementModel>.from(_movements)
@@ -272,26 +271,20 @@ class AppDataProvider extends ChangeNotifier {
     return _sortedCache!;
   }
 
-  // ── P3: Debounced notify ───────────────────────────────────────────────────
-  // Batches rapid consecutive calls into one notify per frame (16ms)
-  // Prevents screen rebuilds on every keystroke in search fields
   void _notify() {
     if (_disposed) return;
     _notifyTimer?.cancel();
-    _notifyTimer = Timer(
-      const Duration(milliseconds: 16),
-      () { if (!_disposed) notifyListeners(); },
-    );
+    _notifyTimer = Timer(const Duration(milliseconds: 16), () {
+      if (!_disposed) notifyListeners();
+    });
   }
 
-  // Immediate notify — used for critical state changes (login, loading done)
   void _notifyNow() {
     if (_disposed) return;
     _notifyTimer?.cancel();
     notifyListeners();
   }
 
-  // Invalidate all caches — called after any mutation
   void _invalidateCaches() {
     _stockDirty  = true;
     _sortedDirty = true;
@@ -305,10 +298,15 @@ class AppDataProvider extends ChangeNotifier {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // INITIALIZE  — called once from main() before runApp
+  // INITIALIZE
+  // Must be called AFTER SupabaseService.initialize() in main.dart
   // ═══════════════════════════════════════════════════════════════════════════
 
   Future<void> initialize() async {
+    _isLoading    = true;
+    _syncFailed   = false;
+    _retryAttempt = 0;
+    _retryMessage = 'Loading data...';
     try {
       await _loadAll();
     } catch (e, st) {
@@ -319,6 +317,7 @@ class AppDataProvider extends ChangeNotifier {
     }
   }
 
+<<<<<<< Updated upstream
 void startRealtimeSync() {
   SyncService.instance.startAutoSync(
     onRemoteMovement:  mergeRemoteMovement,
@@ -327,126 +326,245 @@ void startRealtimeSync() {
 }
   // P2: compute() moves model parsing to a background isolate
   // Main thread only waits — does not parse rows itself
+=======
+  Future<void> retryInitialize() async {
+    _syncFailed   = false;
+    _retryAttempt = 0;
+    _retryMessage = 'Retrying...';
+    _isLoading    = true;
+    _notifyNow();
+    await initialize();
+  }
+
+  // passes onStockInvalidated so SyncService triggers stock refresh
+  // after every realtime movement received from another device
+  void startRealtimeSync() {
+    SyncService.instance.startAutoSync(
+      onRemoteMovement:    mergeRemoteMovement,
+      onMovementsSynced:   _markMovementsSyncedInMemory,
+      onMasterDataChanged: _reloadMasterData,
+      onStockInvalidated:  _onStockInvalidated,
+    );
+  }
+
+  void _onStockInvalidated() {
+    _stockDirty = true;
+    _refreshStockCache();
+  }
+
+  Future<void> _reloadMasterData() async {
+    try {
+      final db      = DatabaseHelper.instance;
+      final results = await Future.wait([
+        db.getItems(), db.getLocations(), db.getStaff(),
+      ]);
+      _items    ..clear()..addAll(_safeParseItems(results[0]));
+      _locations..clear()..addAll(_safeParseLocations(results[1]));
+      _staff    ..clear()..addAll(_safeParseStaff(results[2]));
+      _invalidateCaches();
+      _notifyNow();
+      _refreshStockCache();
+      debugPrint('AppDataProvider: master data reloaded from remote change');
+    } catch (e) {
+      debugPrint('AppDataProvider._reloadMasterData error: $e');
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // _loadAll
+  // ═══════════════════════════════════════════════════════════════════════════
+
+>>>>>>> Stashed changes
   Future<void> _loadAll() async {
     final db = DatabaseHelper.instance;
-
     debugPrint('AppDataProvider: loading from DB...');
 
-    // P4: all 4 queries run in parallel on sqflite background thread
     final results = await Future.wait([
       db.getItems(),
       db.getLocations(),
       db.getStaff(),
-      db.getMovements(limit: 99999),  // load all — stock calc needs full history
+      db.getMovements(limit: 99999),
     ]);
 
-    debugPrint('AppDataProvider: raw rows — '
-        'items:\${results[0].length} '
-        'locations:\${results[1].length} '
-        'staff:\${results[2].length} '
-        'movements:\${results[3].length}');
-
-    // Safe parse — each table parsed individually with error isolation
-    // If one table fails to parse, others still load
     _items    ..clear()..addAll(_safeParseItems(results[0]));
     _locations..clear()..addAll(_safeParseLocations(results[1]));
     _staff    ..clear()..addAll(_safeParseStaff(results[2]));
     _movements..clear()..addAll(_safeParseMovements(results[3]));
 
     debugPrint('AppDataProvider: loaded — '
-        'items:\${_items.length} '
-        'locations:\${_locations.length} '
-        'staff:\${_staff.length} '
-        'movements:\${_movements.length}');
+        'items:${_items.length} locations:${_locations.length} '
+        'staff:${_staff.length} movements:${_movements.length}');
 
-    // If staff is empty on a completely fresh install — seed once
-    // Do NOT reseed if data exists (even partially) — avoids duplicate IDs
     if (_staff.isEmpty && _items.isEmpty && _locations.isEmpty) {
-      debugPrint('AppDataProvider: fresh install — seeding DB');
-      await db.reseed();
-      final staffRows = await db.getStaff();
-      _staff..clear()..addAll(_safeParseStaff(staffRows));
-      final itemRows = await db.getItems();
-      _items..clear()..addAll(_safeParseItems(itemRows));
-      final locRows = await db.getLocations();
-      _locations..clear()..addAll(_safeParseLocations(locRows));
-      debugPrint('AppDataProvider: after seed — staff:\${_staff.length}');
+      debugPrint('AppDataProvider: fresh install detected');
+      await _handleFreshInstall(db);
     }
 
     _invalidateCaches();
   }
 
-  // Safe parsers — catch individual row errors without crashing entire list
-  List<ItemModel> _safeParseItems(List<Map<String,dynamic>> rows) {
-    final result = <ItemModel>[];
-    for (final row in rows) {
-      try { result.add(ItemModel.fromMap(row)); }
-      catch (e) { debugPrint('ItemModel.fromMap error: \$e  row: \$row'); }
+  // ── Fresh install flow ────────────────────────────────────────────────────
+  // Uses SyncFirstResult enum — 3 distinct outcomes, no bool ambiguity:
+  //   success      → Supabase had data → load it → done
+  //   supabaseEmpty → Supabase reachable but empty → first device → seed
+  //   unreachable  → Cannot reach Supabase → retry up to 8x → error screen
+  //                  NEVER seeds hardcoded data on unreachable
+  Future<void> _handleFreshInstall(DatabaseHelper db) async {
+    _retryMessage = 'Connecting to server...';
+    _notifyNow();
+
+    debugPrint('AppDataProvider: attempting first sync from Supabase');
+    final firstTry = await SyncService.instance.firstSyncFromRemote();
+    debugPrint('AppDataProvider: firstSyncFromRemote result = $firstTry');
+
+    if (firstTry == SyncFirstResult.success) {
+      await _reloadAfterFirstSync(db, attempt: 1);
+      return;
     }
-    return result;
+
+    if (firstTry == SyncFirstResult.supabaseEmpty) {
+      // First device ever — Supabase is empty, seed locally then push
+      debugPrint('AppDataProvider: first device ever — seeding locally');
+      _retryMessage = 'Setting up for first time...';
+      _notifyNow();
+      await _seedAndLoad(db);
+      return;
+    }
+
+    // SyncFirstResult.unreachable — retry loop
+    // NEVER seeds hardcoded data just because Supabase is unreachable
+    for (int i = 2; i <= _maxRetries; i++) {
+      _retryAttempt = i;
+      _retryMessage = 'Connecting to server...\nAttempt $i of $_maxRetries';
+      _notifyNow();
+      debugPrint('AppDataProvider: retry $i/$_maxRetries — waiting ${_retryDelaySec}s');
+
+      await Future.delayed(const Duration(seconds: _retryDelaySec));
+
+      final result = await SyncService.instance.firstSyncFromRemote();
+      debugPrint('AppDataProvider: retry $i result = $result');
+
+      if (result == SyncFirstResult.success) {
+        await _reloadAfterFirstSync(db, attempt: i);
+        return;
+      }
+      if (result == SyncFirstResult.supabaseEmpty) {
+        debugPrint('AppDataProvider: Supabase empty on retry $i — seeding');
+        await _seedAndLoad(db);
+        return;
+      }
+      // Still unreachable — continue loop
+    }
+
+    // All retries exhausted — show error screen, no hardcoded data
+    _syncFailed   = true;
+    _retryMessage = 'Could not reach server after $_maxRetries attempts.';
+    debugPrint('AppDataProvider: all retries failed — showing error screen');
+  }
+
+  // Called only when Supabase is confirmed empty (first device ever).
+  // Checkpoint 3: calls db.seedData() directly — NOT db.reseed().
+  // db.reseed() drops+recreates tables via _onCreate() which no longer seeds.
+  // db.seedData() writes directly into the already-open empty tables — correct.
+  Future<void> _seedAndLoad(DatabaseHelper db) async {
+    await db.seedData();   // ← direct call, not reseed()
+    final seedResults = await Future.wait([
+      db.getItems(),
+      db.getLocations(),
+      db.getStaff(),
+    ]);
+    _items    ..clear()..addAll(_safeParseItems(seedResults[0]));
+    _locations..clear()..addAll(_safeParseLocations(seedResults[1]));
+    _staff    ..clear()..addAll(_safeParseStaff(seedResults[2]));
+    debugPrint('AppDataProvider: seed done — staff:${_staff.length}');
+    // Mark dirty so seeded data pushes to Supabase on first sync
+    SyncService.instance.markMasterDirty();
+  }
+
+  Future<void> _reloadAfterFirstSync(DatabaseHelper db, {required int attempt}) async {
+    debugPrint('AppDataProvider: first sync succeeded on attempt $attempt');
+    _retryMessage = 'Data loaded!';
+    final r = await Future.wait([
+      db.getItems(),
+      db.getLocations(),
+      db.getStaff(),
+      db.getMovements(limit: 99999),
+    ]);
+    _items    ..clear()..addAll(_safeParseItems(r[0]));
+    _locations..clear()..addAll(_safeParseLocations(r[1]));
+    _staff    ..clear()..addAll(_safeParseStaff(r[2]));
+    _movements..clear()..addAll(_safeParseMovements(r[3]));
+    debugPrint('AppDataProvider: after first sync — '
+        'items:${_items.length} locations:${_locations.length} '
+        'staff:${_staff.length} movements:${_movements.length}');
+  }
+
+  // ── Safe parsers ──────────────────────────────────────────────────────────
+  List<ItemModel> _safeParseItems(List<Map<String,dynamic>> rows) {
+    final r = <ItemModel>[];
+    for (final row in rows) {
+      try { r.add(ItemModel.fromMap(row)); }
+      catch (e) { debugPrint('ItemModel parse error: $e  row:$row'); }
+    }
+    return r;
   }
 
   List<LocationModel> _safeParseLocations(List<Map<String,dynamic>> rows) {
-    final result = <LocationModel>[];
+    final r = <LocationModel>[];
     for (final row in rows) {
-      try { result.add(LocationModel.fromMap(row)); }
-      catch (e) { debugPrint('LocationModel.fromMap error: \$e  row: \$row'); }
+      try { r.add(LocationModel.fromMap(row)); }
+      catch (e) { debugPrint('LocationModel parse error: $e  row:$row'); }
     }
-    return result;
+    return r;
   }
 
   List<StaffModel> _safeParseStaff(List<Map<String,dynamic>> rows) {
-    final result = <StaffModel>[];
+    final r = <StaffModel>[];
     for (final row in rows) {
-      try { result.add(StaffModel.fromMap(row)); }
-      catch (e) { debugPrint('StaffModel.fromMap error: \$e  row: \$row'); }
+      try { r.add(StaffModel.fromMap(row)); }
+      catch (e) { debugPrint('StaffModel parse error: $e  row:$row'); }
     }
-    return result;
+    return r;
   }
 
   List<MovementModel> _safeParseMovements(List<Map<String,dynamic>> rows) {
-    final result = <MovementModel>[];
+    final r = <MovementModel>[];
     for (final row in rows) {
-      try { result.add(MovementModel.fromMap(row)); }
-      catch (e) { debugPrint('MovementModel.fromMap error: \$e  row: \$row'); }
+      try { r.add(MovementModel.fromMap(row)); }
+      catch (e) { debugPrint('MovementModel parse error: $e  row:$row'); }
     }
-    return result;
+    return r;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // STOCK CALCULATION  (P1 + P4)
-  // P1: result cached, recalculated only when _stockDirty = true
-  // P4: calculation runs in background isolate via compute()
+  // STOCK CALCULATION
   // ═══════════════════════════════════════════════════════════════════════════
 
-  // Synchronous fast path — returns cache if available
-  // Screens call this — no await needed
   List<StockBalance> getStock() {
     if (!_stockDirty && _stockCache != null) return _stockCache!;
-    // Cache miss — calculate synchronously this frame, schedule async refresh
-    _stockCache  = _calcStock(_StockInput(items, locations, _movements));
-    _stockDirty  = false;
+    _stockCache = _calcStock(_StockInput(items, locations, _movements));
+    _stockDirty = false;
     return _stockCache!;
   }
 
-  // Async refresh — called after mutations to update cache in background
   Future<void> _refreshStockCache() async {
     try {
       final result = await compute(
         _calcStock,
         _StockInput(items, locations, List.from(_movements)),
       );
+      if (_disposed) return;
       _stockCache = result;
       _stockDirty = false;
+      _notify(); // stock screen redraws with fresh numbers
     } catch (e) {
       debugPrint('_refreshStockCache error: $e');
-      _stockDirty = true; // force recalc next call
+      _stockDirty = true;
     }
   }
 
-  double totalStockForItem(String itemId) => getStock()
-      .where((s) => s.item.id == itemId)
-      .fold(0, (sum, s) => sum + s.balance);
+  double totalStockForItem(String itemId) =>
+      getStock().where((s) => s.item.id == itemId).fold(0, (sum, s) => sum + s.balance);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // AUTH
@@ -455,15 +573,9 @@ void startRealtimeSync() {
   bool login({required String staffId, required String pin}) {
     try {
       final s = _staff.firstWhere((s) => s.id == staffId);
-      if (s.pin == pin) {
-        _currentStaff = s;
-        _notifyNow();
-        return true;
-      }
+      if (s.pin == pin) { _currentStaff = s; _notifyNow(); return true; }
       return false;
-    } catch (_) {
-      return false;
-    }
+    } catch (_) { return false; }
   }
 
   void loginWithoutPin({required String staffId}) {
@@ -471,15 +583,10 @@ void startRealtimeSync() {
       final s = _staff.firstWhere((s) => s.id == staffId);
       _currentStaff = s;
       _notifyNow();
-    } catch (e) {
-      debugPrint('loginWithoutPin: $e');
-    }
+    } catch (e) { debugPrint('loginWithoutPin: $e'); }
   }
 
-  void logout() {
-    _currentStaff = null;
-    _notifyNow();
-  }
+  void logout() { _currentStaff = null; _notifyNow(); }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // ITEMS
@@ -503,6 +610,7 @@ void startRealtimeSync() {
         'updated_at': now.toIso8601String(),
         'is_deleted': 0,
       });
+<<<<<<< Updated upstream
 
       _items.add(ItemModel(
         id: itemId, name: name, unit: unit,
@@ -518,17 +626,21 @@ void startRealtimeSync() {
         'updated_at': now.toIso8601String(),
         'is_deleted': 0,
       }]));
+=======
+      _items.add(ItemModel(id: itemId, name: name, unit: unit, createdAt: now, updatedAt: now));
+      SyncService.instance.markMasterDirty();
+>>>>>>> Stashed changes
 
-      final staffFallback = _staff.isNotEmpty ? _staff.first.id : 'STF-00001';
       if (openingLocationId != null && openingQty != null && openingQty > 0) {
-        final mvtId = await IdGenerator.instance.movement();
+        final mvtId   = await IdGenerator.instance.movement();
+        final staffId = _currentStaff?.id ?? (staff.isNotEmpty ? staff.first.id : 'STF-00001');
         await db.insertMovement({
           'movement_id':   mvtId,
           'item_id':       itemId,
           'quantity':      openingQty,
           'from_location': 'SUPPLIER',
           'to_location':   openingLocationId,
-          'staff_id':      _currentStaff?.id ?? _currentStaff?.id ?? (staff.isNotEmpty ? staff.first.id : 'STF-00001'),
+          'staff_id':      staffId,
           'created_at':    now.toIso8601String(),
           'updated_at':    now.toIso8601String(),
           'edited':        0,
@@ -541,7 +653,7 @@ void startRealtimeSync() {
           itemId:         itemId,
           fromLocationId: 'SUPPLIER',
           toLocationId:   openingLocationId,
-          staffId:        _currentStaff?.id ?? _currentStaff?.id ?? (staff.isNotEmpty ? staff.first.id : 'STF-00001'),
+          staffId:        staffId,
           quantity:       openingQty,
           createdAt:      now,
           remark:         'Opening stock',
@@ -550,10 +662,8 @@ void startRealtimeSync() {
 
       _invalidateCaches();
       _notify();
-      _refreshStockCache(); // update cache in background
-    } catch (e) {
-      debugPrint('addItem error: $e');
-    }
+      _refreshStockCache();
+    } catch (e) { debugPrint('addItem error: $e'); }
   }
 
   Future<void> editItem({
@@ -568,6 +678,7 @@ void startRealtimeSync() {
         'unit':       unit,
         'updated_at': now.toIso8601String(),
       });
+<<<<<<< Updated upstream
       final item     = _items.firstWhere((i) => i.id == id);
       item.name      = name;
       item.unit      = unit;
@@ -580,16 +691,20 @@ void startRealtimeSync() {
         'updated_at': now.toIso8601String(),
         'is_deleted': 0,
       }]));
+=======
+      final item = _items.firstWhere((i) => i.id == id);
+      item.name = name; item.unit = unit; item.updatedAt = now;
+      SyncService.instance.markMasterDirty();
+>>>>>>> Stashed changes
       _notify();
-    } catch (e) {
-      debugPrint('editItem($id): $e');
-    }
+    } catch (e) { debugPrint('editItem($id): $e'); }
   }
 
   Future<void> deleteItem(String id) async {
     try {
       final now = DateTime.now();
       await DatabaseHelper.instance.softDeleteItem(id);
+<<<<<<< Updated upstream
       final item     = _items.firstWhere((i) => i.id == id);
       item.isDeleted = true;
       item.updatedAt = now;
@@ -601,26 +716,25 @@ void startRealtimeSync() {
         'updated_at': now.toIso8601String(),
         'is_deleted': 1,
       }]));
+=======
+      final item = _items.firstWhere((i) => i.id == id);
+      item.isDeleted = true; item.updatedAt = now;
+      SyncService.instance.markMasterDirty();
+>>>>>>> Stashed changes
       _invalidateCaches();
       _notify();
-    } catch (e) {
-      debugPrint('deleteItem($id): $e');
-    }
+    } catch (e) { debugPrint('deleteItem($id): $e'); }
   }
 
   ItemModel? getItemById(String id) {
-    try { return _items.firstWhere((i) => i.id == id); }
-    catch (_) { return null; }
+    try { return _items.firstWhere((i) => i.id == id); } catch (_) { return null; }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // LOCATIONS
   // ═══════════════════════════════════════════════════════════════════════════
 
-  Future<void> addLocation({
-    required String name,
-    required String type,
-  }) async {
+  Future<void> addLocation({required String name, required String type}) async {
     try {
       final now   = DateTime.now();
       final locId = await IdGenerator.instance.location();
@@ -632,6 +746,7 @@ void startRealtimeSync() {
         'updated_at':    now.toIso8601String(),
         'is_deleted':    0,
       });
+<<<<<<< Updated upstream
       _locations.add(LocationModel(
         id: locId, name: name, type: type,
         createdAt: now, updatedAt: now,
@@ -645,10 +760,12 @@ void startRealtimeSync() {
         'updated_at':    now.toIso8601String(),
         'is_deleted':    0,
       }]));
+=======
+      _locations.add(LocationModel(id: locId, name: name, type: type, createdAt: now, updatedAt: now));
+      SyncService.instance.markMasterDirty();
+>>>>>>> Stashed changes
       _notify();
-    } catch (e) {
-      debugPrint('addLocation error: $e');
-    }
+    } catch (e) { debugPrint('addLocation error: $e'); }
   }
 
   Future<void> editLocation({
@@ -663,6 +780,7 @@ void startRealtimeSync() {
         'type':          type,
         'updated_at':    now.toIso8601String(),
       });
+<<<<<<< Updated upstream
       final loc    = _locations.firstWhere((l) => l.id == id);
       loc.name      = name;
       loc.type      = type;
@@ -675,16 +793,20 @@ void startRealtimeSync() {
         'updated_at':    now.toIso8601String(),
         'is_deleted':    0,
       }]));
+=======
+      final loc = _locations.firstWhere((l) => l.id == id);
+      loc.name = name; loc.type = type; loc.updatedAt = now;
+      SyncService.instance.markMasterDirty();
+>>>>>>> Stashed changes
       _notify();
-    } catch (e) {
-      debugPrint('editLocation($id): $e');
-    }
+    } catch (e) { debugPrint('editLocation($id): $e'); }
   }
 
   Future<void> deleteLocation(String id) async {
     try {
       final now = DateTime.now();
       await DatabaseHelper.instance.softDeleteLocation(id);
+<<<<<<< Updated upstream
       final loc     = _locations.firstWhere((l) => l.id == id);
       loc.isDeleted = true;
       loc.updatedAt = now;
@@ -696,16 +818,18 @@ void startRealtimeSync() {
         'updated_at':    now.toIso8601String(),
         'is_deleted':    1,
       }]));
+=======
+      final loc = _locations.firstWhere((l) => l.id == id);
+      loc.isDeleted = true; loc.updatedAt = now;
+      SyncService.instance.markMasterDirty();
+>>>>>>> Stashed changes
       _invalidateCaches();
       _notify();
-    } catch (e) {
-      debugPrint('deleteLocation($id): $e');
-    }
+    } catch (e) { debugPrint('deleteLocation($id): $e'); }
   }
 
   LocationModel? getLocationById(String id) {
-    try { return _locations.firstWhere((l) => l.id == id); }
-    catch (_) { return null; }
+    try { return _locations.firstWhere((l) => l.id == id); } catch (_) { return null; }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -727,6 +851,7 @@ void startRealtimeSync() {
         'role':       role,
         'created_at': now.toIso8601String(),
       });
+<<<<<<< Updated upstream
       _staff.add(StaffModel(
         id: staffId, name: name, pin: pin,
         role: role, createdAt: now,
@@ -739,10 +864,12 @@ void startRealtimeSync() {
         'role':       role,
         'created_at': now.toIso8601String(),
       }]));
+=======
+      _staff.add(StaffModel(id: staffId, name: name, pin: pin, role: role, createdAt: now));
+      SyncService.instance.markMasterDirty();
+>>>>>>> Stashed changes
       _notify();
-    } catch (e) {
-      debugPrint('addStaff error: $e');
-    }
+    } catch (e) { debugPrint('addStaff error: $e'); }
   }
 
   Future<void> editStaff({
@@ -759,9 +886,7 @@ void startRealtimeSync() {
         'pin':        pin,
         'role':       newRole,
       });
-      s.name = name;
-      s.pin  = pin;
-      s.role = newRole;
+      s.name = name; s.pin = pin; s.role = newRole;
       if (_currentStaff?.id == id) _currentStaff = s;
       // Push update to Supabase immediately
       unawaited(SupabaseService.instance.pushStaff([{
@@ -772,9 +897,7 @@ void startRealtimeSync() {
         'created_at': s.createdAt.toIso8601String(),
       }]));
       _notify();
-    } catch (e) {
-      debugPrint('editStaff($id): $e');
-    }
+    } catch (e) { debugPrint('editStaff($id): $e'); }
   }
 
   Future<void> deleteStaff(String id) async {
@@ -782,13 +905,16 @@ void startRealtimeSync() {
       final s = _staff.firstWhere((s) => s.id == id);
       await DatabaseHelper.instance.deleteStaff(id);
       _staff.removeWhere((s) => s.id == id);
+<<<<<<< Updated upstream
       if (_currentStaff?.id == id) { _currentStaff = null; }
       // Delete from Supabase immediately — staff has no soft delete
       unawaited(SupabaseService.instance.deleteStaff(id));
+=======
+      if (_currentStaff?.id == id) _currentStaff = null;
+      SyncService.instance.markMasterDirty();
+>>>>>>> Stashed changes
       _notify();
-    } catch (e) {
-      debugPrint('deleteStaff($id): $e');
-    }
+    } catch (e) { debugPrint('deleteStaff($id): $e'); }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -804,8 +930,7 @@ void startRealtimeSync() {
     String?         remark,
   }) async {
     if (quantity <= 0 || fromLocationId == toLocationId) {
-      debugPrint('addMovement: invalid params');
-      return;
+      debugPrint('addMovement: invalid params'); return;
     }
     try {
       final now   = DateTime.now();
@@ -824,7 +949,6 @@ void startRealtimeSync() {
         'sync_status':   'pending',
         'remark':        remark,
       });
-
       _movements.insert(0, MovementModel(
         id:             mvtId,
         itemId:         itemId,
@@ -835,18 +959,11 @@ void startRealtimeSync() {
         createdAt:      now,
         remark:         remark,
       ));
-
       _invalidateCaches();
       _notify();
-      _refreshStockCache(); // async background refresh
-    } catch (e) {
-      debugPrint('addMovement error: $e');
-    }
+      _refreshStockCache();
+    } catch (e) { debugPrint('addMovement error: $e'); }
   }
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // EDIT MOVEMENT  (spec section 7)
-  // ═══════════════════════════════════════════════════════════════════════════
 
   Future<bool> editMovement({
     required String movementId,
@@ -855,13 +972,11 @@ void startRealtimeSync() {
     required String toLocationId,
     String?         remark,
   }) async {
-    if (quantity <= 0)                    { debugPrint('editMovement: qty <= 0');    return false; }
-    if (fromLocationId == toLocationId)   { debugPrint('editMovement: from == to'); return false; }
-
+    if (quantity <= 0)                  { debugPrint('editMovement: qty <= 0');    return false; }
+    if (fromLocationId == toLocationId) { debugPrint('editMovement: from == to'); return false; }
     try {
       final now     = DateTime.now();
       final staffId = _currentStaff?.id;
-
       await DatabaseHelper.instance.updateMovement(movementId, {
         'quantity':      quantity,
         'from_location': fromLocationId,
@@ -872,7 +987,6 @@ void startRealtimeSync() {
         'updated_at':    now.toIso8601String(),
         'sync_status':   'pending',
       });
-
       final m = _movements.firstWhere((m) => m.id == movementId);
       m.quantity       = quantity;
       m.fromLocationId = fromLocationId;
@@ -882,76 +996,58 @@ void startRealtimeSync() {
       m.editedBy       = staffId;
       m.editedAt       = now;
       m.syncStatus     = 'pending';
-
       _invalidateCaches();
       _notify();
       _refreshStockCache();
       return true;
-    } catch (e) {
-      debugPrint('editMovement($movementId): $e');
-      return false;
-    }
+    } catch (e) { debugPrint('editMovement($movementId): $e'); return false; }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // SYNC
   // ═══════════════════════════════════════════════════════════════════════════
 
-  // Called by SyncService realtime callback when another device pushes a record
-  // Merges single remote movement into memory cache — lightweight, no full reload
   Future<void> mergeRemoteMovement(Map<String,dynamic> row) async {
     try {
-      final m = MovementModel.fromMap(_normaliseRemoteRow(row));
+      final m   = MovementModel.fromMap(_normaliseRemoteRow(row));
       final idx = _movements.indexWhere((e) => e.id == m.id);
-      if (idx >= 0) {
-        // Update existing
-        _movements[idx] = m;
-      } else {
-        // New from another device — insert sorted by createdAt
-        _movements.insert(0, m);
-      }
+      if (idx >= 0) { _movements[idx] = m; } else { _movements.insert(0, m); }
       _invalidateCaches();
       _notify();
-      debugPrint('AppDataProvider: remote movement merged — \${m.id}');
+      _refreshStockCache();
+      debugPrint('AppDataProvider: remote movement merged — ${m.id}');
     } catch (e) {
-      debugPrint('AppDataProvider.mergeRemoteMovement error: \$e');
-      // Fallback: full reload if merge fails
+      debugPrint('AppDataProvider.mergeRemoteMovement error: $e');
       await _reloadMovements();
     }
   }
 
-  // Normalise Supabase row to match SQLite column names
   Map<String,dynamic> _normaliseRemoteRow(Map<String,dynamic> row) => {
-    'movement_id':   row['movement_id'],
-    'item_id':       row['item_id'],
+    'movement_id':   row['movement_id']?.toString(),
+    'item_id':       row['item_id']?.toString(),
     'quantity':      row['quantity'],
-    'from_location': row['from_location'],
-    'to_location':   row['to_location'],
-    'staff_id':      row['staff_id'],
+    'from_location': row['from_location']?.toString(),
+    'to_location':   row['to_location']?.toString(),
+    'staff_id':      row['staff_id']?.toString(),
     'created_at':    row['created_at']?.toString(),
     'updated_at':    row['updated_at']?.toString(),
     'edited':        row['edited'] == true ? 1 : 0,
-    'edited_by':     row['edited_by'],
+    'edited_by':     row['edited_by']?.toString(),
     'sync_status':   'synced',
-    'remark':        row['remark'],
+    'remark':        row['remark']?.toString(),
   };
 
-  // Full reload of movements from SQLite — after pull or on error
   Future<void> _reloadMovements() async {
     try {
-      // Load all movements — no limit — so stock calculation is always accurate
       final rows   = await DatabaseHelper.instance.getMovements(limit: 99999);
       final parsed = await compute(_parseMovements, rows);
       _movements..clear()..addAll(parsed);
       _invalidateCaches();
       _notifyNow();
-    } catch (e) {
-      debugPrint('AppDataProvider._reloadMovements error: \$e');
-    }
+      _refreshStockCache();
+    } catch (e) { debugPrint('AppDataProvider._reloadMovements error: $e'); }
   }
 
-  // Called by SyncService after successful push — updates in-memory list
-  // without a full DB reload so UI reflects synced status immediately
   void _markMovementsSyncedInMemory(List<String> ids) {
     final idSet = ids.toSet();
     for (final m in _movements) {
@@ -960,7 +1056,6 @@ void startRealtimeSync() {
     _notify();
   }
 
-  // Manual sync — called from SyncScreen button
   Future<bool> syncNow() async {
     final result = await SyncService.instance.sync(silent: false);
     final ok = result.isSuccess;
@@ -968,17 +1063,12 @@ void startRealtimeSync() {
     return ok;
   }
 
-  // Local-only sync mark — used when Supabase is not configured
   Future<void> markAllSynced() async {
     try {
       await DatabaseHelper.instance.markAllSynced();
-      for (final m in _movements) {
-        m.syncStatus = 'synced';
-      }
+      for (final m in _movements) { m.syncStatus = 'synced'; }
       _notify();
-    } catch (e) {
-      debugPrint('markAllSynced: $e');
-    }
+    } catch (e) { debugPrint('markAllSynced: $e'); }
   }
 
 

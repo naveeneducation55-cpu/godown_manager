@@ -907,7 +907,7 @@ class _DataRow extends StatelessWidget {
         Container(
           width: 40, height: 40,
           decoration: BoxDecoration(
-            color: accent.withOpacity(0.08),
+            color: accent.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
           ),
           child: Center(
@@ -932,7 +932,7 @@ class _DataRow extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(
                       horizontal: 7, vertical: 2),
                   decoration: BoxDecoration(
-                    color: accent.withOpacity(0.08),
+                    color: accent.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(meta,
@@ -990,7 +990,7 @@ class _RoleBanner extends StatelessWidget {
         decoration: BoxDecoration(
           color:        t.successBg,
           borderRadius: BorderRadius.circular(AppSpacing.radiusXs),
-          border:       Border.all(color: t.success.withOpacity(0.3), width: 0.8),
+          border:       Border.all(color: t.success.withValues(alpha: 0.3), width: 0.8),
         ),
         child: Row(children: [
           Icon(Icons.admin_panel_settings_outlined,
@@ -1011,7 +1011,7 @@ class _RoleBanner extends StatelessWidget {
       decoration: BoxDecoration(
         color:        t.infoBg,
         borderRadius: BorderRadius.circular(AppSpacing.radiusXs),
-        border:       Border.all(color: t.infoFg.withOpacity(0.2), width: 0.8),
+        border:       Border.all(color: t.infoFg.withValues(alpha: 0.2), width: 0.8),
       ),
       child: Row(children: [
         Icon(Icons.info_outline_rounded, size: 13, color: t.infoFg),

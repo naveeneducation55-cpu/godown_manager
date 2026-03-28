@@ -196,10 +196,41 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
 
   // ── Build ─────────────────────────────────────────────────────────────────────
   @override
-  Widget build(BuildContext context) {
+ Widget build(BuildContext context) {
     final t    = context.appTheme;
-    // Watch so dropdowns reflect any changes in items/locations
     final data = context.watch<AppDataProvider>();
+
+    // Re-resolve selected locations from live list on every build.
+    // Realtime sync replaces LocationModel instances with new objects.
+    // DropdownButton uses == (object identity) — stale ref causes assertion crash.
+    final locs  = data.locations;
+    final items = data.items;
+    if (_selectedItem != null) {
+      final fresh = items.where((i) => i.id == _selectedItem!.id).firstOrNull;
+      if (fresh != null && !identical(fresh, _selectedItem)) {
+        _selectedItem = fresh;
+        _itemCtrl.text = fresh.name;
+      } else if (fresh == null) {
+        _selectedItem = null; // item was deleted remotely
+        _itemCtrl.clear();
+      }
+    }
+    if (_selectedFrom != null) {
+      final fresh = locs.where((l) => l.id == _selectedFrom!.id).firstOrNull;
+      if (fresh != null && !identical(fresh, _selectedFrom)) {
+        _selectedFrom = fresh;
+      } else if (fresh == null) {
+        _selectedFrom = null; // location was deleted remotely
+      }
+    }
+    if (_selectedTo != null) {
+      final fresh = locs.where((l) => l.id == _selectedTo!.id).firstOrNull;
+      if (fresh != null && !identical(fresh, _selectedTo)) {
+        _selectedTo = fresh;
+      } else if (fresh == null) {
+        _selectedTo = null;
+      }
+    }
 
     return GestureDetector(
       onTap: () {
