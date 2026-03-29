@@ -220,8 +220,8 @@ class AppDataProvider extends ChangeNotifier {
   bool   _syncFailed    = false;
   int    _retryAttempt  = 0;
   String _retryMessage  = 'Loading data...';
-  static const _maxRetries    = 5;
-  static const _retryDelaySec = 10;
+  static const _maxRetries    = 20;
+  static const _retryDelaySec = 5;
 
   // Stock cache
   List<StockBalance>? _stockCache;
@@ -798,6 +798,7 @@ class AppDataProvider extends ChangeNotifier {
       _invalidateCaches();
       _notify();
       _refreshStockCache();
+      SyncService.instance.pushNow(); // push immediately — don't wait for timer
     } catch (e) { debugPrint('addMovement error: $e'); }
   }
 
@@ -835,6 +836,7 @@ class AppDataProvider extends ChangeNotifier {
       _invalidateCaches();
       _notify();
       _refreshStockCache();
+      SyncService.instance.pushNow(); // push immediately
       return true;
     } catch (e) { debugPrint('editMovement($movementId): $e'); return false; }
   }

@@ -131,123 +131,130 @@ class _SyncLoadingScreen extends StatelessWidget {
     return Scaffold(
       backgroundColor: const Color(0xFF2563EB),
       body: SafeArea(
-        child: Column(
-          children: [
-            const Spacer(flex: 3),
-            Container(
-              width: 80, height: 80,
-              decoration: BoxDecoration(
-                color:        Colors.white.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.3),
-                  width: 1.5,
+        child: SizedBox(
+          width: double.infinity,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              const Spacer(flex: 3),
+              Container(
+                width: 80, height: 80,
+                decoration: BoxDecoration(
+                  color:        Colors.white.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.3),
+                    width: 1.5,
+                  ),
                 ),
-              ),
-              child: const Center(
-                child: Text(
-                  'GI',
-                  style: TextStyle(
-                    fontFamily:    'Inter',
-                    fontSize:      28,
-                    fontWeight:    FontWeight.w800,
-                    color:         Colors.white,
-                    letterSpacing: 1,
+                child: const Center(
+                  child: Text(
+                    'SBT',
+                    style: TextStyle(
+                      fontFamily:    'Inter',
+                      fontSize:      28,
+                      fontWeight:    FontWeight.w800,
+                      color:         Colors.white,
+                      letterSpacing: 1,
+                    ),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              'Godown Inventory',
-              style: TextStyle(
-                fontFamily:    'Inter',
-                fontSize:      24,
-                fontWeight:    FontWeight.w700,
-                color:         Colors.white,
-                letterSpacing: 0.5,
-              ),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Sri Baba Traders',
-              style: TextStyle(
-                fontFamily: 'Inter',
-                fontSize:   13,
-                color:      Colors.white70,
-              ),
-            ),
-            const Spacer(flex: 2),
-            SizedBox(
-              width: 28, height: 28,
-              child: CircularProgressIndicator(
-                strokeWidth: 2.5,
-                color: Colors.white.withValues(alpha: 0.9),
-              ),
-            ),
-            const SizedBox(height: 20),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 48),
-              child: Text(
-                message,
+              const SizedBox(height: 20),
+              const Text(
+                'Godown Inventory',
                 textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontFamily: 'Inter',
-                  fontSize:   14,
-                  color:      Colors.white,
-                  height:     1.5,
+                style: TextStyle(
+                  fontFamily:    'Inter',
+                  fontSize:      24,
+                  fontWeight:    FontWeight.w700,
+                  color:         Colors.white,
+                  letterSpacing: 0.5,
                 ),
               ),
-            ),
-            if (attempt > 0) ...[
-              const SizedBox(height: 16),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: List.generate(max, (i) {
-                  final done    = i < attempt;
-                  final current = i == attempt - 1;
-                  return AnimatedContainer(
-                    duration: const Duration(milliseconds: 300),
-                    margin: const EdgeInsets.symmetric(horizontal: 3),
-                    width:  current ? 20 : 8,
-                    height: 8,
-                    decoration: BoxDecoration(
-                      color: done
-                          ? Colors.white.withValues(alpha: 0.9)
-                          : Colors.white.withValues(alpha: 0.25),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                  );
-                }),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Keep internet on',
+              const SizedBox(height: 6),
+              const Text(
+                'Sri Baba Traders',
+                textAlign: TextAlign.center,
                 style: TextStyle(
                   fontFamily: 'Inter',
-                  fontSize:   12,
-                  color:      Colors.white.withValues(alpha: 0.6),
+                  fontSize:   13,
+                  color:      Colors.white70,
+                ),
+              ),
+              const Spacer(flex: 2),
+              SizedBox(
+                width: 28, height: 28,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.5,
+                  color: Colors.white.withValues(alpha: 0.9),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 48),
+                child: Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontFamily: 'Inter',
+                    fontSize:   14,
+                    color:      Colors.white,
+                    height:     1.5,
+                  ),
+                ),
+              ),
+              if (attempt > 0) ...[
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: List.generate(max, (i) {
+                    final done    = i < attempt;
+                    final current = i == attempt - 1;
+                    return AnimatedContainer(
+                      duration: const Duration(milliseconds: 300),
+                      margin: const EdgeInsets.symmetric(horizontal: 3),
+                      width:  current ? 20 : 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: done
+                            ? Colors.white.withValues(alpha: 0.9)
+                            : Colors.white.withValues(alpha: 0.25),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    );
+                  }),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Keep internet on',
+                  style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontSize:   12,
+                    color:      Colors.white.withValues(alpha: 0.6),
+                  ),
+                ),
+              ],
+              const Spacer(flex: 1),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 24),
+                child: Text(
+                  'v2.1.0',
+                  style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontSize:   11,
+                    color:      Colors.white.withValues(alpha: 0.4),
+                  ),
                 ),
               ),
             ],
-            const Spacer(flex: 1),
-            Padding(
-              padding: const EdgeInsets.only(bottom: 24),
-              child: Text(
-                'v1.0.0',
-                style: TextStyle(
-                  fontFamily: 'Inter',
-                  fontSize:   11,
-                  color:      Colors.white.withValues(alpha: 0.4),
-                ),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
   }
 }
+
 
 class _SyncErrorScreen extends StatelessWidget {
   final Future<void> Function() onRetry;

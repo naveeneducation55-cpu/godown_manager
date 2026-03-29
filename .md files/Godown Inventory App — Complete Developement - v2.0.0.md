@@ -1,5 +1,5 @@
 # Godown Inventory App — Complete Development Journal
-### Sri Baba Traders · Flutter + SQLite + Supabase · Android
+### Sri Baba Traders · Flutter + SQLite + Supabase · Android · v2.1.0
 
 > **Purpose of this document**
 > A complete record of every technical decision, problem, and solution made
@@ -100,21 +100,36 @@ since only one device ever starts fresh at a time in practice.
 
 ## Sync Architecture
 
+### Checkpoint 3 (original)
 ```
-REALTIME  → Supabase websocket pushes changes in < 1 second
-PERIODIC  → Pull every 30 seconds — catches missed realtime events
-ON-DEMAND → Manual sync button in SyncScreen
-ON-RECONNECT → Fires immediately when internet restores
+PUSH      → 30s periodic timer (bad — waits up to 30s)
+PULL      → 30s periodic timer (unnecessary — realtime handles it)
+REALTIME  → Supabase websocket for incoming changes (instant)
+ON-RECONNECT → immediate sync
 ```
+
+### Checkpoint 4 (optimised — current)
+```
+PUSH movements    → immediately on addMovement / editMovement via pushNow()
+PUSH master data  → immediately on any CRUD via markMasterDirty()
+PULL              → Supabase Realtime websocket only (zero polling)
+FALLBACK pull     → every 5 min — catches missed realtime events only
+ON-RECONNECT      → pushNow() drains pending queue immediately
+ON-APP-STARTUP    → pushNow() after 2s — clears any pre-restart pending
+MANUAL            → sync screen button — full push + pull on demand
+```
+
+**Result:** Zero unnecessary network calls. Data reaches other devices in 1-2 seconds. Battery and data friendly.
 
 ### Conflict resolution
-`latest updated_at wins` — if two devices edit the same movement, whichever
-had the later timestamp keeps its version. Simple and predictable.
+`latest updated_at wins` — if two devices edit the same movement, whichever had the later timestamp keeps its version. Simple and predictable.
 
-### Offline behaviour
-- All writes go to SQLite immediately with `sync_status = 'pending'`
-- UI shows pending count — staff knows what hasn't synced yet
-- When internet restores, connectivity listener fires → pending records push → status updates to `synced`
+### Offline behaviour — zero data loss guarantee
+- Every write goes to SQLite immediately with `sync_status = 'pending'`
+- Pending queue has no expiry — survives app restarts and crashes
+- Device can be offline for days or weeks — pending queue intact on reconnect
+- `pushNow()` on reconnect drains entire queue regardless of size
+- `_lastSyncAt` persisted to SQLite — accurate pull window after long offline gaps
 
 ---
 
@@ -982,19 +997,155 @@ On existing devices (not fresh install), SQLite already has data. `data.staff.is
 
 ---
 
-## Current Working State (Checkpoint 3 — March 2026)
+## Checkpoint 4 — Sync Optimisation
+
+### What changed
+The 30-second periodic timer was doing a full push + pull every 30 seconds regardless of whether anything had changed. This was wasteful — network calls when nothing happened, battery drain, and movements still waited up to 30 seconds to reach other devices.
+
+**Architecture redesign:**
+
+| Trigger | Before | After |
+|---|---|---|
+| Movement saved | waits up to 30s | `pushNow()` immediately |
+| Item/location/staff changed | waits up to 30s | `markMasterDirty()` → push immediately |
+| Incoming changes | realtime ✓ | realtime ✓ (unchanged) |
+| Safety net | 30s full sync | 5-min pull-only |
+| Network restore | full sync | `pushNow()` only |
+
+### `pushNow()` — the key addition
+Called by `addMovement()` and `editMovement()` after every save:
+```dart
+// In AppDataProvider
+SyncService.instance.pushNow(); // fire and forget, non-blocking
+```
+
+```dart
+// In SyncService
+Future<void> pushNow() async {
+  if (_isSyncing) return; // already running, pending included
+  final reachable = await _isReachableCached();
+  if (!reachable) return; // SQLite queue safe, pushes on reconnect
+  _isSyncing = true;
+  try { await _pushPending(); }
+  finally { _isSyncing = false; }
+}
+```
+
+### `markMasterDirty()` — self-triggering push
+Master data changes now trigger their own immediate push:
+```dart
+void markMasterDirty() {
+  _masterDataDirty = true;
+  _pushMasterDataNow(); // immediate, not waiting for any timer
+}
+```
+
+### Pull-only fallback
+Separate from push — only pulls, never pushes:
+```dart
+Future<void> _pullOnly() async {
+  // runs every 5 min — catches any missed realtime events
+  await _pullMasterData();
+  await _pullMovements();
+}
+```
+
+### `_lastSyncAt` persistence
+Persisted to SQLite so accurate pull window survives app restarts:
+```dart
+// Save on every successful sync
+await db.saveSetting('last_sync_at', DateTime.now().toIso8601String());
+
+// Load on startup
+final saved = await db.getSetting('last_sync_at');
+_lastSyncAt = saved != null ? DateTime.tryParse(saved) : null;
+```
+Without this, `_lastSyncAt` resets to null on restart → fallback to 30-day window → pulls more than needed. With this → pulls exactly since last sync.
+
+### Long offline scenario (10+ days)
+1. Device saves 50 movements offline → all in SQLite as `pending`
+2. App restarted multiple times — `_lastSyncAt` loaded from SQLite each time
+3. Internet returns → connectivity listener fires → `pushNow()` → all 50 pushed
+4. Pull window = `_lastSyncAt` - 5 min → pulls exactly what was missed
+5. Zero data loss. Zero manual intervention needed.
+
+---
+
+## Future Roadmap — Multi-Shop SaaS (v2.0)
+
+### Architecture decision — multi-tenant vs single-tenant
+
+**Chosen: Multi-tenant (Option A)** — all shops share one Supabase project, isolated by `shop_id` column + Row Level Security.
+
+**Why not separate databases per shop:**
+- One Supabase free tier per shop hits limits fast
+- Schema changes require updating N projects
+- No cross-shop analytics possible
+
+### Database changes needed
+```sql
+-- Add shop_id to every table
+ALTER TABLE items     ADD COLUMN shop_id TEXT NOT NULL;
+ALTER TABLE locations ADD COLUMN shop_id TEXT NOT NULL;
+ALTER TABLE staff     ADD COLUMN shop_id TEXT NOT NULL;
+ALTER TABLE movements ADD COLUMN shop_id TEXT NOT NULL;
+
+-- Row Level Security — enforces shop isolation at DB level
+CREATE POLICY "shop_isolation" ON items
+  USING (shop_id = (auth.jwt() -> 'user_metadata' ->> 'shop_id'));
+```
+
+### Auth redesign — 3 roles
+```
+Super Admin (SaaS owner — web portal only)
+  └── Shop Admin (shop owner — full access within their shop)
+        └── Staff (movement recording only)
+```
+
+**Login flow:**
+- Shop Admin logs in once with email + password via Supabase Auth
+- Device is registered to that shop — JWT contains `shop_id`
+- Staff continue using PIN for daily shift switching (local only)
+- No friction for floor staff — same UX as today
+
+### App changes
+- Replace hardcoded `shop_id` in `secrets.dart` with JWT metadata
+- Add email + password login screen for Shop Admin
+- Keep PIN-based staff switching unchanged
+- SQLite migration: `onUpgrade` adds `shop_id` column to all tables
+- All Supabase queries automatically scoped by RLS — no manual filtering
+
+### Estimated effort
+| Task | Effort |
+|---|---|
+| Supabase schema + RLS | 1 day |
+| App query changes | 2 days |
+| SQLite migration | 1 day |
+| Auth login screen | 2 days |
+| Testing multi-shop | 2 days |
+| Admin web portal | 1-2 weeks |
+
+---
+
+## Current Working State (Checkpoint 4 — March 2026)
 
 ```
-✅ Fresh install: connects to Supabase, loads real data, shows login
-✅ Existing install: loads SQLite instantly, shows login  
-✅ Realtime sync: movements appear on all devices in < 1 second
-✅ Stock calculation: derived from movements, always correct
-✅ Offline mode: works without internet, syncs when reconnected
-✅ Loading screen: blue branded screen with GI logo + retry dots
-✅ Error screen: shown after 20 failed retries with Retry button
-✅ Release APK: builds and distributes correctly via WhatsApp
-✅ INTERNET permission: added to AndroidManifest.xml
-✅ Dropdown crash: fixed — stale references re-resolved on every build
+✅ Fresh install      — connects to Supabase, loads real data, shows login
+✅ Existing install   — loads SQLite instantly, shows login
+✅ Realtime sync      — movements appear on all devices in < 1 second
+✅ Event-driven push  — movements push immediately on save, not on timer
+✅ Master data push   — items/locations/staff push immediately on change
+✅ Pull fallback      — 5-min pull-only catches missed realtime events
+✅ Stock calculation  — derived from movements, always correct
+✅ Offline mode       — works without internet, syncs on reconnect
+✅ Long offline       — 10+ days offline works, zero data loss
+✅ Loading screen     — blue branded screen with GI logo + retry dots
+✅ Error screen       — shown after 20 failed retries with Retry button
+✅ Release APK        — builds and distributes via WhatsApp correctly
+✅ INTERNET permission — added to AndroidManifest.xml
+✅ Dropdown crash     — stale references re-resolved on every build
+✅ Edit sync          — history edits pushed immediately to other devices
+✅ debugPrint         — silent in release, no screen output, no security risk
 ```
 
 ---
@@ -1028,6 +1179,6 @@ shared_preferences: 2.5.4   # Login persistence (staff ID)
 
 ---
 
-*Document version: Checkpoint 3 — March 2026*
+*Document version: v2.1.0 — March 2026*
 *App version: v1.0.0 — Single shop · 7 devices · Offline-first*
-*Last updated: Bugs 17-19 added · INTERNET permission fix · Release APK working*
+*Last updated: Checkpoint 4 sync optimisation · Multi-shop roadmap · Full working state documented*
