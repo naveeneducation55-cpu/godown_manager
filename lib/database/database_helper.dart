@@ -19,7 +19,7 @@ class DatabaseHelper {
   static Database? _db;
 
   static const _dbName = 'godown_inventory.db';
-  static const _dbVersion = 1;
+  static const _dbVersion = 2;
 
   static const tItems = 'items';
   static const tLocations = 'locations';
@@ -34,7 +34,8 @@ class DatabaseHelper {
   Future<Database> _initDb() async {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, _dbName);
-    return openDatabase(path, version: _dbVersion, onCreate: _onCreate);
+    return openDatabase(path, version: _dbVersion,
+        onCreate: _onCreate, onUpgrade: _onUpgrade);
   }
 
   // Creates empty tables only — no seed data
@@ -87,7 +88,8 @@ class DatabaseHelper {
             edited_by       TEXT,
             sync_status     TEXT    NOT NULL DEFAULT 'pending'
                                     CHECK(sync_status IN ('pending','synced')),
-            remark          TEXT
+            remark          TEXT,
+            is_deleted      INTEGER NOT NULL DEFAULT 0
           )
         ''');
 
@@ -103,6 +105,15 @@ class DatabaseHelper {
     });
 
     debugPrint('DatabaseHelper: tables created — empty, no seed');
+  }
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute(
+        'ALTER TABLE $tMovements ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0',
+      );
+      debugPrint('DatabaseHelper: migrated v1→v2 — is_deleted added to movements');
+    }
   }
 
   
@@ -366,7 +377,11 @@ class DatabaseHelper {
       {int limit = 200, int offset = 0}) async {
     final d = await db;
     return d.query(tMovements,
-        orderBy: 'created_at DESC', limit: limit, offset: offset);
+        where:     'is_deleted = ?',
+        whereArgs: [0],
+        orderBy:   'created_at DESC',
+        limit:     limit,
+        offset:    offset);
   }
 
   Future<int> getMovementCount() async {
@@ -415,9 +430,29 @@ class DatabaseHelper {
   Future<List<Map<String, dynamic>>> getPendingMovements() async {
     final d = await db;
     return d.query(tMovements,
-        where: 'sync_status = ?',
+        where:     'sync_status = ? AND is_deleted = ?',
+        whereArgs: ['pending', 0],
+        orderBy:   'created_at ASC');
+  }
+
+  // Includes soft-deleted pending — needed for sync push so deletions reach Supabase
+  Future<List<Map<String, dynamic>>> getPendingMovementsAll() async {
+    final d = await db;
+    return d.query(tMovements,
+        where:     'sync_status = ?',
         whereArgs: ['pending'],
-        orderBy: 'created_at ASC');
+        orderBy:   'created_at ASC');
+  }
+
+  Future<void> softDeleteMovement(String id, {String? deletedBy}) async {
+    final d   = await db;
+    final now = DateTime.now().toIso8601String();
+    await d.update(tMovements, {
+      'is_deleted':  1,
+      'edited_by':   deletedBy,
+      'updated_at':  now,
+      'sync_status': 'pending',
+    }, where: 'movement_id = ?', whereArgs: [id]);
   }
 
   Future<bool> upsertMovementFromRemote(Map<String, dynamic> remote) async {
@@ -430,40 +465,40 @@ class DatabaseHelper {
 
     if (existing.isEmpty) {
       await d.insert(tMovements, {
-        'movement_id': remoteId,
-        'item_id': remote['item_id']?.toString(),
-        'quantity': remote['quantity'],
+        'movement_id':   remoteId,
+        'item_id':       remote['item_id']?.toString(),
+        'quantity':      remote['quantity'],
         'from_location': remote['from_location']?.toString(),
-        'to_location': remote['to_location']?.toString(),
-        'staff_id': remote['staff_id']?.toString(),
-        'created_at': remote['created_at']?.toString(),
-        'updated_at': remoteTs,
-        'edited': remote['edited'] == true ? 1 : 0,
-        'edited_by': remote['edited_by']?.toString(),
-        'sync_status': 'synced',
-        'remark': remote['remark'],
+        'to_location':   remote['to_location']?.toString(),
+        'staff_id':      remote['staff_id']?.toString(),
+        'created_at':    remote['created_at']?.toString(),
+        'updated_at':    remoteTs,
+        'edited':        remote['edited'] == true ? 1 : 0,
+        'edited_by':     remote['edited_by']?.toString(),
+        'sync_status':   'synced',
+        'remark':        remote['remark'],
+        'is_deleted':    (remote['is_deleted'] == true || remote['is_deleted'] == 1) ? 1 : 0,
       });
       return true;
     } else {
-      final localTs = existing.first['updated_at'] as String;
+      final localTs         = existing.first['updated_at'] as String;
       final localSyncStatus = existing.first['sync_status'] as String;
       if (remoteTs.compareTo(localTs) > 0) {
-        await d.update(
-            tMovements,
-            {
-              'quantity': remote['quantity'],
-              'from_location': remote['from_location']?.toString(),
-              'to_location': remote['to_location']?.toString(),
-              'edited': remote['edited'] == true ? 1 : 0,
-              'edited_by': remote['edited_by']?.toString(),
-              'updated_at': remoteTs,
-              'sync_status': 'synced',
-              'remark': remote['remark'],
-            },
-            where: 'movement_id = ?',
-            whereArgs: [remoteId]);
+        // Remote is newer — accept, mark synced
+        await d.update(tMovements, {
+          'quantity':      remote['quantity'],
+          'from_location': remote['from_location']?.toString(),
+          'to_location':   remote['to_location']?.toString(),
+          'edited':        remote['edited'] == true ? 1 : 0,
+          'edited_by':     remote['edited_by']?.toString(),
+          'updated_at':    remoteTs,
+          'sync_status':   'synced',
+          'remark':        remote['remark'],
+          'is_deleted':    (remote['is_deleted'] == true || remote['is_deleted'] == 1) ? 1 : 0,
+        }, where: 'movement_id = ?', whereArgs: [remoteId]);
         return true;
       }
+      // Local is newer — keep local, preserve pending so it gets pushed to Supabase
       if (localSyncStatus == 'pending') {
         debugPrint('DatabaseHelper: local newer than remote — keeping pending for push');
       }

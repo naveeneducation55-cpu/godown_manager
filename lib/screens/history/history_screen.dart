@@ -110,7 +110,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 padding: const EdgeInsets.symmetric(
                     horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: t.primary.withValues(alpha:0.1),
+                  color: t.primary.withOpacity(0.1),
                   borderRadius:
                       BorderRadius.circular(AppSpacing.radiusXs),
                 ),
@@ -238,7 +238,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
 }
 
 // ─── Single log row ───────────────────────────────────────────────────────────
-class _LogRow extends StatelessWidget {
+class _LogRow extends StatefulWidget {
   final MovementModel   movement;
   final AppDataProvider data;
   final bool            isLast;
@@ -250,21 +250,64 @@ class _LogRow extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
+  State<_LogRow> createState() => _LogRowState();
+}
+
+class _LogRowState extends State<_LogRow> {
+
+  Future<void> _confirmDelete(BuildContext context) async {
     final t = context.appTheme;
-    final m = movement;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: t.surface,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppSpacing.radius)),
+        title: Text('Delete movement?',
+            style: AppFonts.heading(color: t.text)),
+        content: Text(
+          'This will remove the movement and update stock on all devices. '
+          'This cannot be undone.',
+          style: AppFonts.body(color: t.text2),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text('Cancel', style: AppFonts.body(color: t.text3)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text('Delete',
+                style: AppFonts.body(color: t.error)
+                    .copyWith(fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final ok = await widget.data.deleteMovement(widget.movement.id);
+    if (!mounted) return;
+    if (!ok) showError(context, 'Failed to delete. Try again.');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t       = context.appTheme;
+    final m       = widget.movement;
+    final isAdmin = widget.data.isAdmin;
 
     // Resolve names safely
-    final item  = data.getItemById(m.itemId);
-    final from  = data.getLocationById(m.fromLocationId);
-    final to    = data.getLocationById(m.toLocationId);
-    final staff = data.staff.firstWhere(
+    final item  = widget.data.getItemById(m.itemId);
+    final from  = widget.data.getLocationById(m.fromLocationId);
+    final to    = widget.data.getLocationById(m.toLocationId);
+    final staff = widget.data.staff.firstWhere(
       (s) => s.id == m.staffId,
       orElse: () => StaffModel(
           id: '', name: 'Unknown', pin: '', createdAt: DateTime.now()),
     );
     final editedByStaff = m.editedBy != null
-        ? data.staff.firstWhere(
+        ? widget.data.staff.firstWhere(
             (s) => s.id == m.editedBy,
             orElse: () => StaffModel(
                 id: '', name: 'Unknown', pin: '',
@@ -272,101 +315,131 @@ class _LogRow extends StatelessWidget {
           )
         : null;
 
-    // Quantity display
     final qty = m.quantity == m.quantity.truncateToDouble()
         ? m.quantity.toInt().toString()
         : m.quantity.toStringAsFixed(1);
 
-    // From label — 'SUPPLIER' means opening stock from external source
     final fromName = m.fromLocationId == 'SUPPLIER'
         ? 'Supplier'
         : (from?.name ?? '—');
 
-    // Opening stock movements (SUPPLIER) cannot be edited
     final canEdit = m.fromLocationId != 'SUPPLIER';
 
-    return GestureDetector(
+    // ── Row content ──────────────────────────────────────────────────────────
+    final rowContent = GestureDetector(
       onTap: canEdit
-          ? () => _showEditSheet(context, m, data)
+          ? () => _showEditSheet(context, m, widget.data)
           : null,
       child: Container(
-      decoration: isLast
-          ? null
-          : BoxDecoration(
-              border: Border(
-                  bottom: BorderSide(color: t.border, width: 0.5))),
-      padding: const EdgeInsets.symmetric(vertical: 11),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Main log line
-          Text.rich(
-            TextSpan(children: [
-              TextSpan(
-                text:  _fmtTime(m.createdAt),
-                style: AppFonts.monoStyle(size: 12, color: t.text3),
-              ),
-              TextSpan(
-                text:  '  ·  ',
-                style: AppFonts.monoStyle(size: 12, color: t.border),
-              ),
-              TextSpan(
-                text:  staff.name,
-                style: AppFonts.monoStyle(
-                    size:   12,
-                    color:  t.text2,
-                    weight: FontWeight.w600),
-              ),
-              TextSpan(
-                text:  '  ·  ',
-                style: AppFonts.monoStyle(size: 12, color: t.border),
-              ),
-              TextSpan(
-                text:  '$qty ${item?.unit ?? ''}',
-                style: AppFonts.monoStyle(
-                    size:   13,
-                    color:  t.primary,
-                    weight: FontWeight.w700),
-              ),
-              TextSpan(
-                text:  ' ${item?.name ?? '—'}',
-                style: AppFonts.monoStyle(
-                    size:   13,
-                    color:  t.text,
-                    weight: FontWeight.w700),
-              ),
-              TextSpan(
-                text:  '  ·  ',
-                style: AppFonts.monoStyle(size: 12, color: t.border),
-              ),
-              TextSpan(
-                text:  '$fromName → ${to?.name ?? '—'}',
-                style: AppFonts.monoStyle(size: 12, color: t.text2),
-              ),
-            ]),
-            softWrap: true,
-          ),
-
-          // Edited line
-          if (m.edited) ...[
-            const SizedBox(height: 4),
-            Text.rich(TextSpan(children: [
-              TextSpan(
-                text:  '✎ ',
-                style: AppFonts.monoStyle(size: 11, color: t.warnFg),
-              ),
-              TextSpan(
-                text: editedByStaff != null
-                    ? 'edited by ${editedByStaff.name}'
-                    : 'edited',
-                style: AppFonts.monoStyle(size: 11, color: t.warnFg),
-              ),
-            ])),
+        decoration: widget.isLast
+            ? null
+            : BoxDecoration(
+                border: Border(
+                    bottom: BorderSide(color: t.border, width: 0.5))),
+        padding: const EdgeInsets.symmetric(vertical: 11),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text.rich(
+              TextSpan(children: [
+                TextSpan(
+                  text:  _fmtTime(m.createdAt),
+                  style: AppFonts.monoStyle(size: 12, color: t.text3),
+                ),
+                TextSpan(
+                  text:  '  ·  ',
+                  style: AppFonts.monoStyle(size: 12, color: t.border),
+                ),
+                TextSpan(
+                  text:  staff.name,
+                  style: AppFonts.monoStyle(
+                      size:   12,
+                      color:  t.text2,
+                      weight: FontWeight.w600),
+                ),
+                TextSpan(
+                  text:  '  ·  ',
+                  style: AppFonts.monoStyle(size: 12, color: t.border),
+                ),
+                TextSpan(
+                  text:  '$qty ${item?.unit ?? ''}',
+                  style: AppFonts.monoStyle(
+                      size:   13,
+                      color:  t.primary,
+                      weight: FontWeight.w700),
+                ),
+                TextSpan(
+                  text:  ' ${item?.name ?? '—'}',
+                  style: AppFonts.monoStyle(
+                      size:   13,
+                      color:  t.text,
+                      weight: FontWeight.w700),
+                ),
+                TextSpan(
+                  text:  '  ·  ',
+                  style: AppFonts.monoStyle(size: 12, color: t.border),
+                ),
+                TextSpan(
+                  text:  '$fromName → ${to?.name ?? '—'}',
+                  style: AppFonts.monoStyle(size: 12, color: t.text2),
+                ),
+              ]),
+              softWrap: true,
+            ),
+            if (m.edited) ...[
+              const SizedBox(height: 4),
+              Text.rich(TextSpan(children: [
+                TextSpan(
+                  text:  '✎ ',
+                  style: AppFonts.monoStyle(size: 11, color: t.warnFg),
+                ),
+                TextSpan(
+                  text: editedByStaff != null
+                      ? 'edited by ${editedByStaff.name}'
+                      : 'edited',
+                  style: AppFonts.monoStyle(size: 11, color: t.warnFg),
+                ),
+              ])),
+            ],
           ],
-        ],
+        ),
       ),
-    ), // Container
-    ); // GestureDetector
+    );
+
+    // ── Wrap with Dismissible for admin only ─────────────────────────────────
+    if (!isAdmin) return rowContent;
+
+    return Dismissible(
+      key:       ValueKey(m.id),
+      direction: DismissDirection.endToStart,
+      // confirmDismiss handles dialog + deletion — always return false
+      // so the widget is removed only via provider (state-driven, not widget-driven)
+      confirmDismiss: (_) async {
+        await _confirmDelete(context);
+        return false;
+      },
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding:   const EdgeInsets.only(right: AppSpacing.lg),
+        decoration: BoxDecoration(
+          color: t.error,
+          border: widget.isLast
+              ? null
+              : Border(bottom: BorderSide(color: t.error, width: 0.5)),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.delete_outline_rounded,
+                color: Colors.white, size: 22),
+            const SizedBox(height: 3),
+            Text('Delete',
+                style: AppFonts.monoStyle(size: 11, color: Colors.white)),
+          ],
+        ),
+      ),
+      child: rowContent,
+    );
   }
 
   static String _fmtTime(DateTime d) {

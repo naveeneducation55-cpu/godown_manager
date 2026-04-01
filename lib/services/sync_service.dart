@@ -31,9 +31,6 @@ import 'package:flutter/foundation.dart';
 import '../database/database_helper.dart';
 import '../config/app_config.dart';
 import 'supabase_service.dart';
-import '../utils/id_generator.dart';
-import 'package:sqflite/sqflite.dart';
-
 
 enum SyncStatus      { idle, syncing, done, error }
 enum SyncFirstResult { success, supabaseEmpty, unreachable }
@@ -121,7 +118,6 @@ class SyncService {
       onMovementInsert:    _handleRemoteMovement,
       onMovementUpdate:    _handleRemoteMovement,
       onMasterDataChanged: _handleMasterDataChanged,
-      onResubscribe:       _resubscribeRealtime,
     );
 
     // Fallback pull-only — catches missed realtime events
@@ -304,28 +300,13 @@ class SyncService {
     });
   }
 
-  // Called when Realtime channel dies — resubscribe and pull missed events
-  void _resubscribeRealtime() {
-    if (!AppConfig.isSyncEnabled) return;
-    debugPrint('SyncService: resubscribing realtime channel');
-    SupabaseService.instance.subscribeToAll(
-      onMovementInsert:    _handleRemoteMovement,
-      onMovementUpdate:    _handleRemoteMovement,
-      onMasterDataChanged: _handleMasterDataChanged,
-      onResubscribe:       _resubscribeRealtime,
-    );
-    // Pull any movements missed while channel was down
-    _pullMovements().then((_) => _onStockInvalidated?.call());
-    debugPrint('SyncService: realtime resubscribed + pulling missed events');
-  }
-
   // ═══════════════════════════════════════════════════════════════════════════
   // PUSH HELPERS
   // ═══════════════════════════════════════════════════════════════════════════
 
   Future<SyncResult<int>> _pushPending() async {
     final db      = DatabaseHelper.instance;
-    final pending = await db.getPendingMovements();
+    final pending = await db.getPendingMovementsAll();
     if (pending.isEmpty) return const SyncResult.ok(0);
 
     debugPrint('SyncService: pushing ${pending.length} pending movements');
@@ -486,36 +467,6 @@ class SyncService {
       return SyncFirstResult.unreachable;
     }
   }
-// -- -------------------------------------------------------------------------
-Future<void> _loadLastSyncAt() async {
-  try {
-    final db   = await DatabaseHelper.instance.db;
-    final rows = await db.query('device_token',
-        where: 'key = ?', whereArgs: ['last_sync_at']);
-    if (rows.isNotEmpty) {
-      final val = rows.first['value'] as String?;
-      if (val != null) _lastSyncAt = DateTime.tryParse(val);
-      debugPrint('SyncService: loaded lastSyncAt = $_lastSyncAt');
-    }
-  } catch (e) {
-    debugPrint('SyncService._loadLastSyncAt error: $e');
-  }
-}
-
-Future<void> _saveLastSyncAt() async {
-  try {
-    final db  = await DatabaseHelper.instance.db;
-    final now = DateTime.now().toIso8601String();
-    await db.insert('device_token',
-        {'key': 'last_sync_at', 'value': now},
-        conflictAlgorithm: ConflictAlgorithm.replace);
-  } catch (e) {
-    debugPrint('SyncService._saveLastSyncAt error: $e');
-  }
-}
-
-
-
 
   // ── Serialise helpers ──────────────────────────────────────────────────────
   static List<Map<String,dynamic>> _serialiseMovements(
@@ -534,6 +485,7 @@ Future<void> _saveLastSyncAt() async {
         'edited_by':     m['edited_by'],
         'sync_status':   'synced',
         'remark':        m['remark'],
+        'is_deleted':    m['is_deleted'] == 1,
       }).toList();
 
   static List<Map<String,dynamic>> _serialiseMaster(

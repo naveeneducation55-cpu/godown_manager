@@ -113,6 +113,7 @@ class MovementModel {
   DateTime?      editedAt;
   String?        remark;
   String         syncStatus;
+  bool           isDeleted;
 
   MovementModel({
     required this.id,
@@ -127,6 +128,7 @@ class MovementModel {
     this.editedAt,
     this.remark,
     this.syncStatus = 'pending',
+    this.isDeleted  = false,
   });
 
   factory MovementModel.fromMap(Map<String, dynamic> m) => MovementModel(
@@ -144,6 +146,7 @@ class MovementModel {
         : null,
     remark:         m['remark']      as String?,
     syncStatus:     m['sync_status'] as String,
+    isDeleted:      (m['is_deleted']  as int? ?? 0) == 1,
   );
 }
 
@@ -256,7 +259,9 @@ class AppDataProvider extends ChangeNotifier {
 
   List<MovementModel> get sortedMovements {
     if (!_sortedDirty && _sortedCache != null) return _sortedCache!;
-    _sortedCache = List<MovementModel>.from(_movements)
+    _sortedCache = _movements
+        .where((m) => !m.isDeleted)
+        .toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     _sortedDirty = false;
     return _sortedCache!;
@@ -376,6 +381,7 @@ class AppDataProvider extends ChangeNotifier {
       debugPrint('AppDataProvider: fresh install detected');
       await _handleFreshInstall(db);
     }
+
     _invalidateCaches();
   }
 
@@ -757,68 +763,67 @@ class AppDataProvider extends ChangeNotifier {
   // ═══════════════════════════════════════════════════════════════════════════
 
   Future<bool> addMovement({
-    required String itemId,
-    required String fromLocationId,
-    required String toLocationId,
-    required double quantity,
-    required String staffId,
-    String?         remark,
-  }) async {
-    if (quantity <= 0 || fromLocationId == toLocationId) {
-      debugPrint('addMovement: invalid params'); return false;
-    }
-    // Silent guard — UI should have validated, but defend at provider level too
-    if (fromLocationId != 'SUPPLIER') {
-      final stock = getStock();
-      final entry = stock.where((s) =>
-          s.item.id     == itemId &&
-          s.location.id == fromLocationId,
-      ).toList();
-      final available = entry.isEmpty ? 0.0 : entry.first.balance;
-      if (quantity > available) {
-        debugPrint('addMovement: blocked — qty $quantity > available $available');
-        return false;
-      }
-    }
-    try {
-      final now   = DateTime.now();
-      final mvtId = await IdGenerator.instance.movement();
-      await DatabaseHelper.instance.insertMovement({
-        'movement_id':   mvtId,
-        'item_id':       itemId,
-        'quantity':      quantity,
-        'from_location': fromLocationId,
-        'to_location':   toLocationId,
-        'staff_id':      staffId,
-        'created_at':    now.toIso8601String(),
-        'updated_at':    now.toIso8601String(),
-        'edited':        0,
-        'edited_by':     null,
-        'sync_status':   'pending',
-        'remark':        remark,
-      });
-      _movements.insert(0, MovementModel(
-        id:             mvtId,
-        itemId:         itemId,
-        fromLocationId: fromLocationId,
-        toLocationId:   toLocationId,
-        staffId:        staffId,
-        quantity:       quantity,
-        createdAt:      now,
-        remark:         remark,
-      ));
-      _invalidateCaches();
-      _notify();
-      _refreshStockCache();
-      SyncService.instance.pushNow(); // push immediately — don't wait for timer
-      return true;
-    } catch (e) { debugPrint('addMovement error: $e'); return false; }
+  required String itemId,
+  required String fromLocationId,
+  required String toLocationId,
+  required double quantity,
+  required String staffId,
+  String?         remark,
+}) async {
+  if (quantity <= 0 || fromLocationId == toLocationId) {
+    debugPrint('addMovement: invalid params'); return false;
   }
+  if (fromLocationId != 'SUPPLIER') {
+    final stock = getStock();
+    final entry = stock.where((s) =>
+        s.item.id     == itemId &&
+        s.location.id == fromLocationId,
+    ).toList();
+    final available = entry.isEmpty ? 0.0 : entry.first.balance;
+    if (quantity > available) {
+      debugPrint('addMovement: blocked — qty $quantity > available $available');
+      return false;
+    }
+  }
+  try {
+    final now   = DateTime.now();
+    final mvtId = await IdGenerator.instance.movement();
+    await DatabaseHelper.instance.insertMovement({
+      'movement_id':   mvtId,
+      'item_id':       itemId,
+      'quantity':      quantity,
+      'from_location': fromLocationId,
+      'to_location':   toLocationId,
+      'staff_id':      staffId,
+      'created_at':    now.toIso8601String(),
+      'updated_at':    now.toIso8601String(),
+      'edited':        0,
+      'edited_by':     null,
+      'sync_status':   'pending',
+      'remark':        remark,
+    });
+    _movements.insert(0, MovementModel(
+      id:             mvtId,
+      itemId:         itemId,
+      fromLocationId: fromLocationId,
+      toLocationId:   toLocationId,
+      staffId:        staffId,
+      quantity:       quantity,
+      createdAt:      now,
+      remark:         remark,
+    ));
+    _invalidateCaches();
+    _notify();
+    _refreshStockCache();
+    SyncService.instance.pushNow();
+    return true;
+  } catch (e) { debugPrint('addMovement error: $e'); return false; }
+}
 
   Future<bool> editMovement({
     required String movementId,
-    required String itemId,
     required double quantity,
+    required String itemId,
     required String fromLocationId,
     required String toLocationId,
     String?         remark,
@@ -859,11 +864,38 @@ class AppDataProvider extends ChangeNotifier {
   // SYNC
   // ═══════════════════════════════════════════════════════════════════════════
 
+  // Admin only — soft delete movement, sync to all devices
+  Future<bool> deleteMovement(String movementId) async {
+    try {
+      final staffId = _currentStaff?.id;
+      await DatabaseHelper.instance.softDeleteMovement(
+          movementId, deletedBy: staffId);
+      final idx = _movements.indexWhere((m) => m.id == movementId);
+      if (idx >= 0) {
+        _movements[idx].isDeleted  = true;
+        _movements[idx].syncStatus = 'pending';
+      }
+      _invalidateCaches();
+      _notify();
+      _refreshStockCache();
+      SyncService.instance.pushNow();
+      return true;
+    } catch (e) {
+      debugPrint('deleteMovement($movementId): $e');
+      return false;
+    }
+  }
+
   Future<void> mergeRemoteMovement(Map<String,dynamic> row) async {
     try {
       final m   = MovementModel.fromMap(_normaliseRemoteRow(row));
       final idx = _movements.indexWhere((e) => e.id == m.id);
-      if (idx >= 0) { _movements[idx] = m; } else { _movements.insert(0, m); }
+      if (idx >= 0) {
+        _movements[idx] = m;
+      } else if (!m.isDeleted) {
+        // Only insert if not deleted — no point adding a deleted movement
+        _movements.insert(0, m);
+      }
       _invalidateCaches();
       _notify();
       _refreshStockCache();
@@ -887,6 +919,7 @@ class AppDataProvider extends ChangeNotifier {
     'edited_by':     row['edited_by']?.toString(),
     'sync_status':   'synced',
     'remark':        row['remark']?.toString(),
+    'is_deleted':    (row['is_deleted'] == true || row['is_deleted'] == 1) ? 1 : 0,
   };
 
   Future<void> _reloadMovements() async {
