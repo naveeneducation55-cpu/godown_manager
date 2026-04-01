@@ -128,7 +128,7 @@ class _StockScreenState extends State<StockScreen> {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
-                      color: t.primary.withOpacity(0.08),
+                      color: t.primary.withValues(alpha:0.08),
                       borderRadius: BorderRadius.circular(AppSpacing.radiusXs),
                     ),
                     child: Text(
@@ -351,7 +351,7 @@ class _ItemCardState extends State<_ItemCard> {
         color:        t.surface,
         borderRadius: BorderRadius.circular(AppSpacing.radius),
         border: Border.all(
-          color: isZero ? t.error.withOpacity(0.3) : t.border,
+          color: isZero ? t.error.withValues(alpha:0.3) : t.border,
           width: 0.8,
         ),
       ),
@@ -374,7 +374,7 @@ class _ItemCardState extends State<_ItemCard> {
               Container(
                 width: 38, height: 38,
                 decoration: BoxDecoration(
-                  color: accent.withOpacity(0.1),
+                  color: accent.withValues(alpha:0.1),
                   borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
                 ),
                 child: Center(
@@ -401,7 +401,7 @@ class _ItemCardState extends State<_ItemCard> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                         decoration: BoxDecoration(
-                          color: accent.withOpacity(0.08),
+                          color: accent.withValues(alpha:0.08),
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(widget.item.unit,
@@ -423,8 +423,8 @@ class _ItemCardState extends State<_ItemCard> {
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
                   color: isZero
-                      ? t.error.withOpacity(0.1)
-                      : t.primary.withOpacity(0.1),
+                      ? t.error.withValues(alpha:0.1)
+                      : t.primary.withValues(alpha:0.1),
                   borderRadius: BorderRadius.circular(AppSpacing.radiusXs),
                 ),
                 child: Text(
@@ -514,7 +514,7 @@ class _LocationRow extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
           decoration: BoxDecoration(
-            color: isShop ? t.success.withOpacity(0.08) : t.primary.withOpacity(0.08),
+            color: isShop ? t.success.withValues(alpha:0.08) : t.primary.withValues(alpha:0.08),
             borderRadius: BorderRadius.circular(4),
           ),
           child: Text(entry.location.type,
@@ -533,7 +533,7 @@ class _LocationRow extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
           decoration: BoxDecoration(
-            color: t.primary.withOpacity(0.08),
+            color: t.primary.withValues(alpha:0.08),
             borderRadius: BorderRadius.circular(4),
           ),
           child: Text(entry.item.unit,
@@ -600,7 +600,7 @@ class _GodownCardState extends State<_GodownCard> {
               Container(
                 width: 38, height: 38,
                 decoration: BoxDecoration(
-                  color: accent.withOpacity(0.1),
+                  color: accent.withValues(alpha:0.1),
                   borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
                 ),
                 child: Icon(
@@ -633,7 +633,7 @@ class _GodownCardState extends State<_GodownCard> {
                 padding: const EdgeInsets.symmetric(
                     horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: accent.withOpacity(0.1),
+                  color: accent.withValues(alpha:0.1),
                   borderRadius: BorderRadius.circular(AppSpacing.radiusXs),
                 ),
                 child: Text(widget.locationType,
@@ -682,7 +682,7 @@ class _ItemRow extends StatelessWidget {
         Container(
           width: 30, height: 30,
           decoration: BoxDecoration(
-            color: t.primary.withOpacity(0.07),
+            color: t.primary.withValues(alpha:0.07),
             borderRadius: BorderRadius.circular(6),
           ),
           child: Center(
@@ -708,7 +708,7 @@ class _ItemRow extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
           decoration: BoxDecoration(
-            color: t.primary.withOpacity(0.08),
+            color: t.primary.withValues(alpha:0.08),
             borderRadius: BorderRadius.circular(4),
           ),
           child: Text(entry.item.unit,
@@ -740,10 +740,10 @@ class _StatBox extends StatelessWidget {
         padding: const EdgeInsets.symmetric(
             horizontal: AppSpacing.sm, vertical: AppSpacing.sm),
         decoration: BoxDecoration(
-          color: warn ? t.error.withOpacity(0.07) : t.surface,
+          color: warn ? t.error.withValues(alpha:0.07) : t.surface,
           borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
           border: Border.all(
-              color: warn ? t.error.withOpacity(0.3) : t.border,
+              color: warn ? t.error.withValues(alpha:0.3) : t.border,
               width: 0.8),
         ),
         child: Column(children: [

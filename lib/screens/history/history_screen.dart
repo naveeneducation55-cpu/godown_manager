@@ -110,7 +110,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 padding: const EdgeInsets.symmetric(
                     horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: t.primary.withOpacity(0.1),
+                  color: t.primary.withValues(alpha:0.1),
                   borderRadius:
                       BorderRadius.circular(AppSpacing.radiusXs),
                 ),

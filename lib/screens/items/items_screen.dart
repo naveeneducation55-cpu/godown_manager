@@ -182,7 +182,7 @@ class _ItemsScreenState extends State<ItemsScreen> {
                   horizontal: 10, vertical: 4,
                 ),
                 decoration: BoxDecoration(
-                  color:        t.primary.withOpacity(0.1),
+                  color:        t.primary.withValues(alpha:0.1),
                   borderRadius: BorderRadius.circular(AppSpacing.radiusXs),
                 ),
                 child: Text(
@@ -315,7 +315,7 @@ class _ItemRow extends StatelessWidget {
             width:  40,
             height: 40,
             decoration: BoxDecoration(
-              color:        t.primary.withOpacity(0.08),
+              color:        t.primary.withValues(alpha:0.08),
               borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
             ),
             child: Center(
@@ -358,7 +358,7 @@ class _ItemRow extends StatelessWidget {
                         horizontal: 7, vertical: 2,
                       ),
                       decoration: BoxDecoration(
-                        color:        t.primary.withOpacity(0.08),
+                        color:        t.primary.withValues(alpha:0.08),
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Text(

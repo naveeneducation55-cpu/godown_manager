@@ -321,7 +321,7 @@ class _StaffTile extends StatelessWidget {
         padding: const EdgeInsets.all(AppSpacing.md),
         decoration: BoxDecoration(
           color: selected
-              ? t.primary.withOpacity(0.06)
+              ? t.primary.withValues(alpha:0.06)
               : t.surface,
           borderRadius: BorderRadius.circular(AppSpacing.radius),
           border: Border.all(
@@ -334,7 +334,7 @@ class _StaffTile extends StatelessWidget {
           Container(
             width: 40, height: 40,
             decoration: BoxDecoration(
-              color: t.primary.withOpacity(selected ? 0.15 : 0.07),
+              color: t.primary.withValues(alpha:selected ? 0.15 : 0.07),
               borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
             ),
             child: Center(

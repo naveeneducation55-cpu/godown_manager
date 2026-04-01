@@ -293,12 +293,12 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
                           horizontal: AppSpacing.md, vertical: AppSpacing.sm),
                       decoration: BoxDecoration(
                         color: _isRestock
-                            ? t.primary.withOpacity(0.08)
+                            ? t.primary.withValues(alpha:0.08)
                             : t.surface,
                         borderRadius: BorderRadius.circular(AppSpacing.radius),
                         border: Border.all(
                           color: _isRestock
-                              ? t.primary.withOpacity(0.4)
+                              ? t.primary.withValues(alpha:0.4)
                               : t.border,
                           width: 0.8,
                         ),
@@ -345,7 +345,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
                     child: Container(
                       width: 32, height: 32,
                       decoration: BoxDecoration(
-                        color: t.primary.withOpacity(0.08),
+                        color: t.primary.withValues(alpha:0.08),
                         borderRadius: BorderRadius.circular(99),
                       ),
                       child: Icon(
@@ -449,7 +449,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 8, vertical: 2),
                       decoration: BoxDecoration(
-                        color: t.primary.withOpacity(0.1),
+                        color: t.primary.withValues(alpha:0.1),
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Text(
@@ -489,7 +489,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
               border:       Border.all(color: t.border, width: 0.8),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(t.isDark ? 0.3 : 0.06),
+                  color: Colors.black.withValues(alpha:t.isDark ? 0.3 : 0.06),
                   blurRadius: 8,
                   offset: const Offset(0, 3),
                 ),
@@ -552,7 +552,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 7, vertical: 2),
                           decoration: BoxDecoration(
-                            color: t.primary.withOpacity(0.08),
+                            color: t.primary.withValues(alpha:0.08),
                             borderRadius: BorderRadius.circular(4),
                           ),
                           child: Text(
@@ -589,8 +589,8 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
           decoration: BoxDecoration(
             color: _selectedItem != null
-                ? t.primary.withOpacity(0.1)
-                : t.border.withOpacity(0.5),
+                ? t.primary.withValues(alpha:0.1)
+                : t.border.withValues(alpha:0.5),
             borderRadius: BorderRadius.circular(4),
           ),
           child: Text(
@@ -666,15 +666,15 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
       margin:  const EdgeInsets.only(bottom: AppSpacing.sm),
       padding: const EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
-        color: t.primary.withOpacity(0.05),
+        color: t.primary.withValues(alpha:0.05),
         borderRadius: BorderRadius.circular(AppSpacing.radius),
-        border: Border.all(color: t.primary.withOpacity(0.18), width: 0.8),
+        border: Border.all(color: t.primary.withValues(alpha:0.18), width: 0.8),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('PREVIEW',
-              style: AppFonts.labelStyle(color: t.primary.withOpacity(0.6))),
+              style: AppFonts.labelStyle(color: t.primary.withValues(alpha:0.6))),
           const SizedBox(height: 8),
           Text.rich(TextSpan(children: [
             TextSpan(

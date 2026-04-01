@@ -370,7 +370,7 @@ class _ItemSheetState extends State<_ItemSheet> {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 7, vertical: 2),
                           decoration: BoxDecoration(
-                            color: t.primary.withOpacity(0.1),
+                            color: t.primary.withValues(alpha:0.1),
                             borderRadius: BorderRadius.circular(4),
                           ),
                           child: Text(_unit!,
