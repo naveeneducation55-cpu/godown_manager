@@ -390,7 +390,7 @@ class AppDropdownField<T> extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = context.appTheme;
     return DropdownButtonFormField<T>(
-      value:         value,
+      initialValue:         value,
       items:         items,
       onChanged:     onChanged,
       style:         AppFonts.body(color: t.text),

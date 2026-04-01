@@ -572,7 +572,7 @@ class _ItemSheetState extends State<_ItemSheet> {
 
             // ── Unit ──────────────────────────────────────────────────────
             DropdownButtonFormField<String>(
-              value:         _selectedUnit,
+              initialValue:         _selectedUnit,
               dropdownColor: t.surface,
               icon: Icon(
                 Icons.keyboard_arrow_down_rounded, color: t.text3,

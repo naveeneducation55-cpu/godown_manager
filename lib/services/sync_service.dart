@@ -86,13 +86,22 @@ class SyncService {
     _reachableCacheTime = null;
   }
 
-  // ── Master data dirty flag ─────────────────────────────────────────────────
-  bool      _masterDataDirty = true;
+  // ── Per-table dirty flags — only push what actually changed ───────────────
+  // Saves Supabase bandwidth: editing one item doesn't push all locations/staff
+  bool      _itemsDirty     = false;
+  bool      _locationsDirty = false;
+  bool      _staffDirty     = false;
   DateTime? _lastMasterPush;
 
+  bool get _masterDataDirty => _itemsDirty || _locationsDirty || _staffDirty;
+
+  void markItemsDirty()     { _itemsDirty     = true; _pushMasterDataNow(); }
+  void markLocationsDirty() { _locationsDirty = true; _pushMasterDataNow(); }
+  void markStaffDirty()     { _staffDirty     = true; _pushMasterDataNow(); }
+
+  // Kept for callers that don't know which table changed (e.g. seed on first install)
   void markMasterDirty() {
-    _masterDataDirty = true;
-    // Push immediately — don't wait for any timer
+    _itemsDirty = _locationsDirty = _staffDirty = true;
     _pushMasterDataNow();
   }
 
@@ -331,26 +340,33 @@ class SyncService {
   Future<void> _pushMasterData() async {
     if (!_masterDataDirty) return;
     final now = DateTime.now();
-    // Throttle: max once per 60s even if dirty repeatedly
     if (_lastMasterPush != null &&
         now.difference(_lastMasterPush!).inSeconds < 60) return;
 
     try {
-      _lastMasterPush  = now;
-      _masterDataDirty = false;
+      _lastMasterPush = now;
+      final db = DatabaseHelper.instance;
 
-      final db      = DatabaseHelper.instance;
-      final results = await Future.wait([
-        db.getAllItems(), db.getAllLocations(), db.getStaff(),
-      ]);
-
-      await SupabaseService.instance.pushItems(_serialiseMaster(results[0]));
-      await SupabaseService.instance.pushLocations(_serialiseMaster(results[1]));
-      await SupabaseService.instance.pushStaff(_serialiseMaster(results[2]));
+      // Only push tables that actually changed — saves Supabase bandwidth
+      if (_itemsDirty) {
+        final items = await db.getAllItems();
+        await SupabaseService.instance.pushItems(_serialiseMaster(items));
+        _itemsDirty = false;
+      }
+      if (_locationsDirty) {
+        final locs = await db.getAllLocations();
+        await SupabaseService.instance.pushLocations(_serialiseMaster(locs));
+        _locationsDirty = false;
+      }
+      if (_staffDirty) {
+        final staff = await db.getStaff();
+        await SupabaseService.instance.pushStaff(_serialiseMaster(staff));
+        _staffDirty = false;
+      }
 
       debugPrint('SyncService: master data pushed');
     } catch (e) {
-      _masterDataDirty = true; // retry next time
+      // Keep dirty flags true so next attempt retries
       debugPrint('SyncService._pushMasterData error: $e');
     }
   }

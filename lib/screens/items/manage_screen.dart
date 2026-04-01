@@ -63,7 +63,7 @@ class _ManageScreenState extends State<ManageScreen>
                   fontSize:   13,
                   fontWeight: FontWeight.w600),
               unselectedLabelStyle:
-                  TextStyle(fontFamily: AppFonts.sans, fontSize: 13),
+                  const TextStyle(fontFamily: AppFonts.sans, fontSize: 13),
               tabs: const [
                 Tab(text: 'Items'),
                 Tab(text: 'Godowns'),
@@ -283,7 +283,7 @@ class _ItemSheetState extends State<_ItemSheet> {
 
             // Unit
             DropdownButtonFormField<String>(
-              value:         _unit,
+              initialValue:         _unit,
               dropdownColor: t.surface,
               style:         AppFonts.body(color: t.text),
               decoration: InputDecoration(
@@ -321,7 +321,7 @@ class _ItemSheetState extends State<_ItemSheet> {
 
               // Location
               DropdownButtonFormField<LocationModel>(
-                value:         _openingLoc,
+                initialValue:         _openingLoc,
                 dropdownColor: t.surface,
                 style:         AppFonts.body(color: t.text),
                 decoration: InputDecoration(

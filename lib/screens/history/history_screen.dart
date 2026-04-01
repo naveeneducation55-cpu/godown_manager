@@ -16,7 +16,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
   String      _search     = '';
   _DateFilter _dateFilter = _DateFilter.all;
   final _searchCtrl = TextEditingController();
-
   @override
   void dispose() {
     _searchCtrl.dispose();
@@ -406,6 +405,7 @@ class _EditSheetState extends State<_EditSheet> {
   final _formKey = GlobalKey<FormState>();
   LocationModel? _fromLoc;
   LocationModel? _toLoc;
+  ItemModel?     _selectedItem;
   bool _isSaving = false;
 
   @override
@@ -417,9 +417,9 @@ class _EditSheetState extends State<_EditSheet> {
             ? m.quantity.toInt().toString()
             : m.quantity.toStringAsFixed(1));
     _remarkCtrl = TextEditingController(text: m.remark ?? '');
-    // Pre-select current from/to
-    _fromLoc = widget.data.getLocationById(m.fromLocationId);
-    _toLoc   = widget.data.getLocationById(m.toLocationId);
+    _fromLoc      = widget.data.getLocationById(m.fromLocationId);
+    _toLoc        = widget.data.getLocationById(m.toLocationId);
+    _selectedItem = widget.data.getItemById(m.itemId);
   }
 
   @override
@@ -431,8 +431,9 @@ class _EditSheetState extends State<_EditSheet> {
 
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    if (_fromLoc == null) { showError(context, 'Select From location'); return; }
-    if (_toLoc   == null) { showError(context, 'Select To location');   return; }
+    if (_selectedItem == null) { showError(context, 'Select an item');         return; }
+    if (_fromLoc == null)      { showError(context, 'Select From location');   return; }
+    if (_toLoc   == null)      { showError(context, 'Select To location');     return; }
     if (_fromLoc!.id == _toLoc!.id) {
       showError(context, 'From and To cannot be the same');
       return;
@@ -442,35 +443,35 @@ class _EditSheetState extends State<_EditSheet> {
 
     final qty = double.tryParse(_qtyCtrl.text.trim()) ?? 0;
 
-    // Stock validation — available stock + original qty of this movement
-    // (since we're editing, the original qty is already "in use" so add it back)
+    // Stock validation
     if (_fromLoc!.id != 'SUPPLIER') {
       final stockList  = widget.data.getStock();
       final stockEntry = stockList.where((s) =>
-          s.item.id     == widget.movement.itemId &&
+          s.item.id     == _selectedItem!.id &&
           s.location.id == _fromLoc!.id,
       ).toList();
-      // Available = current balance + original movement qty (it will be replaced)
       final currentBalance = stockEntry.isEmpty ? 0.0 : stockEntry.first.balance;
-      final originalQty    = widget.movement.fromLocationId == _fromLoc!.id
-          ? widget.movement.quantity
-          : 0.0;
+      // If item or from-location changed, no original qty to add back
+      final sameItem = _selectedItem!.id == widget.movement.itemId;
+      final sameFrom = _fromLoc!.id == widget.movement.fromLocationId;
+      final originalQty = (sameItem && sameFrom) ? widget.movement.quantity : 0.0;
       final available = currentBalance + originalQty;
 
       if (qty > available) {
-        final item = widget.data.getItemById(widget.movement.itemId);
         showError(
           context,
           'Not enough stock. Available: '
           '${available % 1 == 0 ? available.toInt() : available.toStringAsFixed(1)} '
-          '${item?.unit ?? ''} in ${_fromLoc!.name}',
+          '${_selectedItem!.unit} in ${_fromLoc!.name}',
         );
         setState(() => _isSaving = false);
         return;
       }
     }
-    final ok  = await widget.data.editMovement(
+
+    final ok = await widget.data.editMovement(
       movementId:     widget.movement.id,
+      itemId:         _selectedItem!.id,
       quantity:       qty,
       fromLocationId: _fromLoc!.id,
       toLocationId:   _toLoc!.id,
@@ -495,13 +496,19 @@ class _EditSheetState extends State<_EditSheet> {
     final t         = context.appTheme;
     final bot       = MediaQuery.of(context).viewInsets.bottom;
     final locations = widget.data.locations;
-    final item      = widget.data.getItemById(widget.movement.itemId);
+    final items     = widget.data.items;
 
     // Re-resolve from live list by ID on every build.
-    // After realtime sync, locations list rebuilds with new object instances.
+    // After realtime sync, list rebuilds with new object instances.
     // Dropdown compares by == (object identity) — stale reference = crash.
+    final itemId = _selectedItem?.id;
     final fromId = _fromLoc?.id;
     final toId   = _toLoc?.id;
+    if (itemId != null) {
+      final fresh = items.firstWhere(
+        (i) => i.id == itemId, orElse: () => _selectedItem!);
+      if (!identical(fresh, _selectedItem)) _selectedItem = fresh;
+    }
     if (fromId != null) {
       final fresh = locations.firstWhere(
         (l) => l.id == fromId, orElse: () => _fromLoc!);
@@ -537,38 +544,34 @@ class _EditSheetState extends State<_EditSheet> {
             )),
             const SizedBox(height: AppSpacing.md),
 
-            // Title + item name (fixed — cannot change)
+            // Title
             Row(children: [
-              Expanded(child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Edit Movement',
-                      style: AppFonts.heading(color: t.text)),
-                  const SizedBox(height: 2),
-                  // Item is fixed — shown as read-only label
-                  Row(children: [
-                    Icon(Icons.inventory_2_outlined, size: 12, color: t.text3),
-                    const SizedBox(width: 4),
-                    Text(item?.name ?? '—',
-                        style: AppFonts.monoStyle(size: 11, color: t.text3)),
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: t.warnBg,
-                        borderRadius: BorderRadius.circular(3),
-                      ),
-                      child: Text('item cannot change',
-                          style: AppFonts.monoStyle(size: 9, color: t.warnFg)),
-                    ),
-                  ]),
-                ],
-              )),
+              Expanded(child: Text('Edit Movement',
+                  style: AppFonts.heading(color: t.text))),
               GestureDetector(
                 onTap: () => Navigator.of(context).pop(),
                 child: Icon(Icons.close_rounded, size: 20, color: t.text3),
               ),
             ]),
+            const SizedBox(height: AppSpacing.md),
+
+            // Item selector
+            DropdownButtonFormField<ItemModel>(
+              initialValue:         _selectedItem,
+              dropdownColor: t.surface,
+              style:         AppFonts.body(color: t.text),
+              decoration: InputDecoration(
+                labelText:  'Item',
+                prefixIcon: Icon(Icons.inventory_2_outlined, size: 18, color: t.text3),
+              ),
+              icon: Icon(Icons.keyboard_arrow_down_rounded, color: t.text3),
+              items: items.map((i) => DropdownMenuItem(
+                value: i,
+                child: Text(i.name, style: AppFonts.body(color: t.text)),
+              )).toList(),
+              onChanged: (v) => setState(() => _selectedItem = v),
+              validator: (_) => _selectedItem == null ? 'Select an item' : null,
+            ),
             const SizedBox(height: AppSpacing.lg),
 
             // Quantity
@@ -579,14 +582,14 @@ class _EditSheetState extends State<_EditSheet> {
               decoration: InputDecoration(
                 labelText:  'Quantity',
                 prefixIcon: Icon(Icons.scale_outlined, size: 18, color: t.text3),
-                suffix: item != null
+                suffix: _selectedItem != null
                     ? Container(
                         padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                         decoration: BoxDecoration(
                           color: t.primary.withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(4),
                         ),
-                        child: Text(item.unit,
+                        child: Text(_selectedItem!.unit,
                             style: AppFonts.monoStyle(size: 11, color: t.primary)),
                       )
                     : null,

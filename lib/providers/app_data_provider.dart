@@ -768,6 +768,19 @@ class AppDataProvider extends ChangeNotifier {
     if (quantity <= 0 || fromLocationId == toLocationId) {
       debugPrint('addMovement: invalid params'); return;
     }
+    // Silent guard — UI should have validated, but defend at provider level too
+    if (fromLocationId != 'SUPPLIER') {
+      final stock = getStock();
+      final entry = stock.where((s) =>
+          s.item.id     == itemId &&
+          s.location.id == fromLocationId,
+      ).toList();
+      final available = entry.isEmpty ? 0.0 : entry.first.balance;
+      if (quantity > available) {
+        debugPrint('addMovement: blocked — qty $quantity > available $available');
+        return;
+      }
+    }
     try {
       final now   = DateTime.now();
       final mvtId = await IdGenerator.instance.movement();
@@ -804,6 +817,7 @@ class AppDataProvider extends ChangeNotifier {
 
   Future<bool> editMovement({
     required String movementId,
+    required String itemId,
     required double quantity,
     required String fromLocationId,
     required String toLocationId,
