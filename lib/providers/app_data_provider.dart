@@ -757,7 +757,7 @@ class AppDataProvider extends ChangeNotifier {
   // MOVEMENTS
   // ═══════════════════════════════════════════════════════════════════════════
 
-  Future<void> addMovement({
+  Future<bool> addMovement({
     required String itemId,
     required String fromLocationId,
     required String toLocationId,
@@ -766,7 +766,7 @@ class AppDataProvider extends ChangeNotifier {
     String?         remark,
   }) async {
     if (quantity <= 0 || fromLocationId == toLocationId) {
-      debugPrint('addMovement: invalid params'); return;
+      debugPrint('addMovement: invalid params'); return false;
     }
     // Silent guard — UI should have validated, but defend at provider level too
     if (fromLocationId != 'SUPPLIER') {
@@ -778,7 +778,7 @@ class AppDataProvider extends ChangeNotifier {
       final available = entry.isEmpty ? 0.0 : entry.first.balance;
       if (quantity > available) {
         debugPrint('addMovement: blocked — qty $quantity > available $available');
-        return;
+        return false;
       }
     }
     try {
@@ -812,7 +812,8 @@ class AppDataProvider extends ChangeNotifier {
       _notify();
       _refreshStockCache();
       SyncService.instance.pushNow(); // push immediately — don't wait for timer
-    } catch (e) { debugPrint('addMovement error: $e'); }
+      return true;
+    } catch (e) { debugPrint('addMovement error: $e'); return false; }
   }
 
   Future<bool> editMovement({

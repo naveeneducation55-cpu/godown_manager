@@ -17,6 +17,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
   ItemModel?     _selectedItem;
   LocationModel? _selectedFrom;
   LocationModel? _selectedTo;
+  bool           _isRestock = false;
   bool           _isSaving = false;
 
   // Controllers — all disposed in dispose()
@@ -112,7 +113,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
       showError(context, 'Please select an item');
       return;
     }
-    if (_selectedFrom == null) {
+    if (_selectedFrom == null && !_isRestock) {
       showError(context, 'Please select a From location');
       return;
     }
@@ -120,7 +121,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
       showError(context, 'Please select a To location');
       return;
     }
-    if (_selectedFrom!.id == _selectedTo!.id) {
+    if (!_isRestock && _selectedFrom!.id == _selectedTo!.id) {
       showError(context, 'From and To cannot be the same location');
       return;
     }
@@ -132,28 +133,6 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
       return;
     }
 
-    // Stock validation — skip for SUPPLIER (restock has no limit)
-    if (_selectedFrom!.id != 'SUPPLIER') {
-      final data      = context.read<AppDataProvider>();
-      final stockList = data.getStock();
-      final entry     = stockList.where((s) =>
-          s.item.id     == _selectedItem!.id &&
-          s.location.id == _selectedFrom!.id,
-      ).toList();
-      final available = entry.isEmpty ? 0.0 : entry.first.balance;
-      if (qty > available) {
-        final avail = available % 1 == 0
-            ? available.toInt().toString()
-            : available.toStringAsFixed(1);
-        showError(
-          context,
-          'Not enough stock in ${_selectedFrom!.name}. '
-          'Available: $avail ${_selectedItem!.unit}',
-        );
-        return;
-      }
-    }
-
     setState(() => _isSaving = true);
 
     try {
@@ -161,9 +140,9 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
       final String staffId = data.currentStaff?.id ??
     (data.staff.isNotEmpty ? data.staff.first.id : '');
 
-      data.addMovement(
+      final ok = await data.addMovement(
         itemId:         _selectedItem!.id,
-        fromLocationId: _selectedFrom!.id,
+        fromLocationId: _isRestock ? 'SUPPLIER' : _selectedFrom!.id,
         toLocationId:   _selectedTo!.id,
         quantity:       qty,
         staffId:        staffId,
@@ -174,12 +153,16 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
 
       if (!mounted) return;
 
-      showSuccess(
-        context,
-        '$qty ${_selectedItem!.unit} of ${_selectedItem!.name} '
-        'added to ${_selectedTo!.name}',
-      );
-      _clearForm();
+      if (ok) {
+        showSuccess(
+          context,
+          '$qty ${_selectedItem!.unit} of ${_selectedItem!.name} '
+          'added to ${_selectedTo!.name}',
+        );
+        _clearForm();
+      } else {
+        showError(context, 'Not enough stock. Check available quantity.');
+      }
 
     } catch (e) {
       debugPrint('addMovement error: $e');
@@ -198,6 +181,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
       setState(() {
         _selectedFrom = null;
         _selectedTo   = null;
+        _isRestock    = false;
       });
     }
   }
@@ -205,7 +189,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
   bool get _canSave =>
       _selectedItem != null &&
       _qtyCtrl.text.trim().isNotEmpty &&
-      _selectedFrom != null &&
+      (_isRestock || _selectedFrom != null) &&
       _selectedTo   != null;
 
   String _timeNow() {
@@ -296,6 +280,53 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
                   const SizedBox(height: AppSpacing.xl),
 
                   const SectionLabel('Movement route'),
+
+                  // Restock toggle
+                  GestureDetector(
+                    onTap: () => setState(() {
+                      _isRestock    = !_isRestock;
+                      _selectedFrom = null;
+                    }),
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: AppSpacing.sm + 2),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+                      decoration: BoxDecoration(
+                        color: _isRestock
+                            ? t.primary.withOpacity(0.08)
+                            : t.surface,
+                        borderRadius: BorderRadius.circular(AppSpacing.radius),
+                        border: Border.all(
+                          color: _isRestock
+                              ? t.primary.withOpacity(0.4)
+                              : t.border,
+                          width: 0.8,
+                        ),
+                      ),
+                      child: Row(children: [
+                        Icon(
+                          _isRestock
+                              ? Icons.check_box_rounded
+                              : Icons.check_box_outline_blank_rounded,
+                          size: 18,
+                          color: _isRestock ? t.primary : t.text3,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('New stock arriving — add to existing item',
+                                style: AppFonts.body(
+                                    color: _isRestock ? t.primary : t.text)),
+                            Text('Use this instead of creating a new item',
+                                style: AppFonts.label(color: t.text3)),
+                          ],
+                        )),
+                      ]),
+                    ),
+                  ),
+
+                  if (!_isRestock)
                   _buildLocationField(
                     t:         t,
                     label:     'From',
@@ -305,7 +336,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
                     locations: data.locations,
                     exclude:   _selectedTo,
                     onChanged: (v) => setState(() => _selectedFrom = v),
-                    validator: (_) => _selectedFrom == null
+                    validator: (_) => (!_isRestock && _selectedFrom == null)
                         ? 'From location is required' : null,
                   ),
 
@@ -668,7 +699,9 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
                 size: 13, color: t.text3),
             const SizedBox(width: 4),
             Text(
-              'moved from ${_selectedFrom!.name}',
+              _isRestock
+                  ? 'incoming from Supplier'
+                  : 'moved from ${_selectedFrom!.name}',
               style: AppFonts.monoStyle(size: 12, color: t.text3),
             ),
           ]),
