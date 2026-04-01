@@ -31,6 +31,9 @@ import 'package:flutter/foundation.dart';
 import '../database/database_helper.dart';
 import '../config/app_config.dart';
 import 'supabase_service.dart';
+import '../utils/id_generator.dart';
+import 'package:sqflite/sqflite.dart';
+
 
 enum SyncStatus      { idle, syncing, done, error }
 enum SyncFirstResult { success, supabaseEmpty, unreachable }
@@ -86,22 +89,13 @@ class SyncService {
     _reachableCacheTime = null;
   }
 
-  // ── Per-table dirty flags — only push what actually changed ───────────────
-  // Saves Supabase bandwidth: editing one item doesn't push all locations/staff
-  bool      _itemsDirty     = false;
-  bool      _locationsDirty = false;
-  bool      _staffDirty     = false;
+  // ── Master data dirty flag ─────────────────────────────────────────────────
+  bool      _masterDataDirty = true;
   DateTime? _lastMasterPush;
 
-  bool get _masterDataDirty => _itemsDirty || _locationsDirty || _staffDirty;
-
-  void markItemsDirty()     { _itemsDirty     = true; _pushMasterDataNow(); }
-  void markLocationsDirty() { _locationsDirty = true; _pushMasterDataNow(); }
-  void markStaffDirty()     { _staffDirty     = true; _pushMasterDataNow(); }
-
-  // Kept for callers that don't know which table changed (e.g. seed on first install)
   void markMasterDirty() {
-    _itemsDirty = _locationsDirty = _staffDirty = true;
+    _masterDataDirty = true;
+    // Push immediately — don't wait for any timer
     _pushMasterDataNow();
   }
 
@@ -127,6 +121,7 @@ class SyncService {
       onMovementInsert:    _handleRemoteMovement,
       onMovementUpdate:    _handleRemoteMovement,
       onMasterDataChanged: _handleMasterDataChanged,
+      onResubscribe:       _resubscribeRealtime,
     );
 
     // Fallback pull-only — catches missed realtime events
@@ -309,6 +304,21 @@ class SyncService {
     });
   }
 
+  // Called when Realtime channel dies — resubscribe and pull missed events
+  void _resubscribeRealtime() {
+    if (!AppConfig.isSyncEnabled) return;
+    debugPrint('SyncService: resubscribing realtime channel');
+    SupabaseService.instance.subscribeToAll(
+      onMovementInsert:    _handleRemoteMovement,
+      onMovementUpdate:    _handleRemoteMovement,
+      onMasterDataChanged: _handleMasterDataChanged,
+      onResubscribe:       _resubscribeRealtime,
+    );
+    // Pull any movements missed while channel was down
+    _pullMovements().then((_) => _onStockInvalidated?.call());
+    debugPrint('SyncService: realtime resubscribed + pulling missed events');
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // PUSH HELPERS
   // ═══════════════════════════════════════════════════════════════════════════
@@ -340,33 +350,26 @@ class SyncService {
   Future<void> _pushMasterData() async {
     if (!_masterDataDirty) return;
     final now = DateTime.now();
+    // Throttle: max once per 60s even if dirty repeatedly
     if (_lastMasterPush != null &&
         now.difference(_lastMasterPush!).inSeconds < 60) return;
 
     try {
-      _lastMasterPush = now;
-      final db = DatabaseHelper.instance;
+      _lastMasterPush  = now;
+      _masterDataDirty = false;
 
-      // Only push tables that actually changed — saves Supabase bandwidth
-      if (_itemsDirty) {
-        final items = await db.getAllItems();
-        await SupabaseService.instance.pushItems(_serialiseMaster(items));
-        _itemsDirty = false;
-      }
-      if (_locationsDirty) {
-        final locs = await db.getAllLocations();
-        await SupabaseService.instance.pushLocations(_serialiseMaster(locs));
-        _locationsDirty = false;
-      }
-      if (_staffDirty) {
-        final staff = await db.getStaff();
-        await SupabaseService.instance.pushStaff(_serialiseMaster(staff));
-        _staffDirty = false;
-      }
+      final db      = DatabaseHelper.instance;
+      final results = await Future.wait([
+        db.getAllItems(), db.getAllLocations(), db.getStaff(),
+      ]);
+
+      await SupabaseService.instance.pushItems(_serialiseMaster(results[0]));
+      await SupabaseService.instance.pushLocations(_serialiseMaster(results[1]));
+      await SupabaseService.instance.pushStaff(_serialiseMaster(results[2]));
 
       debugPrint('SyncService: master data pushed');
     } catch (e) {
-      // Keep dirty flags true so next attempt retries
+      _masterDataDirty = true; // retry next time
       debugPrint('SyncService._pushMasterData error: $e');
     }
   }
@@ -483,6 +486,36 @@ class SyncService {
       return SyncFirstResult.unreachable;
     }
   }
+// -- -------------------------------------------------------------------------
+Future<void> _loadLastSyncAt() async {
+  try {
+    final db   = await DatabaseHelper.instance.db;
+    final rows = await db.query('device_token',
+        where: 'key = ?', whereArgs: ['last_sync_at']);
+    if (rows.isNotEmpty) {
+      final val = rows.first['value'] as String?;
+      if (val != null) _lastSyncAt = DateTime.tryParse(val);
+      debugPrint('SyncService: loaded lastSyncAt = $_lastSyncAt');
+    }
+  } catch (e) {
+    debugPrint('SyncService._loadLastSyncAt error: $e');
+  }
+}
+
+Future<void> _saveLastSyncAt() async {
+  try {
+    final db  = await DatabaseHelper.instance.db;
+    final now = DateTime.now().toIso8601String();
+    await db.insert('device_token',
+        {'key': 'last_sync_at', 'value': now},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  } catch (e) {
+    debugPrint('SyncService._saveLastSyncAt error: $e');
+  }
+}
+
+
+
 
   // ── Serialise helpers ──────────────────────────────────────────────────────
   static List<Map<String,dynamic>> _serialiseMovements(

@@ -446,6 +446,7 @@ class DatabaseHelper {
       return true;
     } else {
       final localTs = existing.first['updated_at'] as String;
+      final localSyncStatus = existing.first['sync_status'] as String;
       if (remoteTs.compareTo(localTs) > 0) {
         await d.update(
             tMovements,
@@ -462,6 +463,9 @@ class DatabaseHelper {
             where: 'movement_id = ?',
             whereArgs: [remoteId]);
         return true;
+      }
+      if (localSyncStatus == 'pending') {
+        debugPrint('DatabaseHelper: local newer than remote — keeping pending for push');
       }
       return false;
     }

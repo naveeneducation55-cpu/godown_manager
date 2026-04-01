@@ -85,14 +85,17 @@ class SupabaseService {
   // ═══════════════════════════════════════════════════════════════════════════
 
   RealtimeChannel? _channel;
+  void Function()? _onResubscribe;
 
   void subscribeToAll({
     required void Function(Map<String, dynamic> row) onMovementInsert,
     required void Function(Map<String, dynamic> row) onMovementUpdate,
     required void Function() onMasterDataChanged,
+    void Function()? onResubscribe,
   }) {
     if (!AppConfig.isSyncEnabled) return;
 
+    _onResubscribe = onResubscribe;
     _channel?.unsubscribe();
 
     _channel = _client
@@ -146,6 +149,17 @@ class SupabaseService {
         )
         .subscribe((status, [error]) {
           debugPrint('Realtime status: $status ${error ?? ''}');
+          if (status == RealtimeSubscribeStatus.channelError ||
+              status == RealtimeSubscribeStatus.timedOut) {
+            // Channel died (network drop, etc) — resubscribe after 5s
+            debugPrint('SupabaseService: channel error — will resubscribe in 5s');
+            Future.delayed(const Duration(seconds: 5), () {
+              if (_onResubscribe != null) {
+                debugPrint('SupabaseService: triggering resubscribe');
+                _onResubscribe!();
+              }
+            });
+          }
         });
   }
 

@@ -31,7 +31,7 @@ class IdGenerator {
   Database? _db;
   String?   _deviceToken;
 
-  Future<Database> get _seqDb async {
+  Future<Database> get seqDb async {
     _db ??= await _open();
     return _db!;
   }
@@ -90,7 +90,7 @@ class IdGenerator {
   // Load device token once, cache it
   Future<String> _getDeviceToken() async {
     if (_deviceToken != null) return _deviceToken!;
-    final db   = await _seqDb;
+    final db   = await seqDb;
     final rows = await db.query(_deviceTable,
         where: 'key = ?', whereArgs: ['token']);
     _deviceToken = rows.isNotEmpty
@@ -100,7 +100,7 @@ class IdGenerator {
   }
 
   Future<int> _nextSeq(String prefix) async {
-    final db = await _seqDb;
+    final db = await seqDb;
     int next  = 1;
     await db.transaction((txn) async {
       final rows = await txn.query(

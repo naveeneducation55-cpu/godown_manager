@@ -376,7 +376,6 @@ class AppDataProvider extends ChangeNotifier {
       debugPrint('AppDataProvider: fresh install detected');
       await _handleFreshInstall(db);
     }
-
     _invalidateCaches();
   }
 
