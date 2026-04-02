@@ -239,7 +239,7 @@ class _SyncLoadingScreen extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(bottom: 24),
                 child: Text(
-                  'v2.1.0',
+                  'v2.1.3',
                   style: TextStyle(
                     fontFamily: 'Inter',
                     fontSize:   11,
