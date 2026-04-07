@@ -27,3 +27,6 @@ flutter_02.png
 godown_manager_slides.html
 lib/screens/home/ui-design-spec.md
 "@
+# allow only these two from docs
+!docs/CHECKPOINT_v2.2.0.md
+!docs/DEVELOPMENT_JOURNAL_v2.0.0.md
