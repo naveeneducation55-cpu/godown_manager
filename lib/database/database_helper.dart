@@ -19,12 +19,13 @@ class DatabaseHelper {
   static Database? _db;
 
   static const _dbName = 'godown_inventory.db';
-  static const _dbVersion = 2;
+  static const _dbVersion = 3;
 
-  static const tItems = 'items';
+  static const tItems     = 'items';
   static const tLocations = 'locations';
-  static const tStaff = 'staff';
+  static const tStaff     = 'staff';
   static const tMovements = 'movements';
+  static const tSettings  = 'app_settings';
 
   Future<Database> get db async {
     _db ??= await _initDb();
@@ -98,10 +99,16 @@ class DatabaseHelper {
           'CREATE INDEX idx_movements_item_id ON $tMovements(item_id)');
       await txn.execute(
           'CREATE INDEX idx_movements_from ON $tMovements(from_location)');
-      await txn
-          .execute('CREATE INDEX idx_movements_to ON $tMovements(to_location)');
+      await txn.execute(
+          'CREATE INDEX idx_movements_to ON $tMovements(to_location)');
       await txn.execute(
           'CREATE INDEX idx_movements_created ON $tMovements(created_at)');
+      await txn.execute('''
+          CREATE TABLE $tSettings (
+            key    TEXT PRIMARY KEY,
+            value  TEXT
+          )
+        ''');
     });
 
     debugPrint('DatabaseHelper: tables created — empty, no seed');
@@ -113,6 +120,15 @@ class DatabaseHelper {
         'ALTER TABLE $tMovements ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0',
       );
       debugPrint('DatabaseHelper: migrated v1→v2 — is_deleted added to movements');
+    }
+    if (oldVersion < 3) {
+      await db.execute('''
+          CREATE TABLE IF NOT EXISTS $tSettings (
+            key    TEXT PRIMARY KEY,
+            value  TEXT
+          )
+        ''');
+      debugPrint('DatabaseHelper: migrated v2→v3 — app_settings table created');
     }
   }
 
@@ -527,6 +543,45 @@ class DatabaseHelper {
         ORDER BY l.location_name, i.item_name
       ''');
   }
+
+
+ // ═══════════════════════════════════════════════════════════════════════════
+  // SETTINGS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  Future<DateTime?> getLastSyncAt() async {
+    try {
+      final d   = await db;
+      final res = await d.query(
+        tSettings,
+        where:     'key = ?',
+        whereArgs: ['last_sync_at'],
+      );
+      if (res.isEmpty) return null;
+      final val = res.first['value'] as String?;
+      if (val == null || val.isEmpty) return null;
+      return DateTime.tryParse(val);
+    } catch (e) {
+      debugPrint('DatabaseHelper.getLastSyncAt error: $e');
+      return null;
+    }
+  }
+
+  Future<void> saveLastSyncAt(DateTime dt) async {
+    try {
+      final d = await db;
+      await d.insert(
+        tSettings,
+        {'key': 'last_sync_at', 'value': dt.toIso8601String()},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    } catch (e) {
+      debugPrint('DatabaseHelper.saveLastSyncAt error: $e');
+    }
+  }
+
+
+
 
   // ═══════════════════════════════════════════════════════════════════════════
   // UTILITY

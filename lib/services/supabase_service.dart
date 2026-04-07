@@ -19,11 +19,12 @@
 // Conflict resolution (spec section 13):
 //   latest updated_at wins — enforced in upsert + DatabaseHelper
 // ─────────────────────────────────────────────────────────────────────────────
-
+import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/foundation.dart';
 import '../config/app_config.dart';
 
+import 'package:intl/intl.dart';
 // ── Result wrapper — no exceptions reach callers ──────────────────────────────
 class SyncResult<T> {
   final T?      data;
@@ -84,8 +85,11 @@ class SupabaseService {
   // Checkpoint 2: Merged 2 channels into 1 — halves websocket connections
   // ═══════════════════════════════════════════════════════════════════════════
 
-  RealtimeChannel? _channel;
+   RealtimeChannel? _channel;
   void Function()? _onResubscribe;
+  bool _isReconnecting = false;
+  bool _isSubscribed = false;
+  Timer? _heartbeatTimer;
 
   void subscribeToAll({
     required void Function(Map<String, dynamic> row) onMovementInsert,
@@ -149,18 +153,40 @@ class SupabaseService {
         )
         .subscribe((status, [error]) {
           debugPrint('Realtime status: $status ${error ?? ''}');
-          if (status == RealtimeSubscribeStatus.channelError ||
-              status == RealtimeSubscribeStatus.timedOut) {
-            // Channel died (network drop, etc) — resubscribe after 5s
+          if (status == RealtimeSubscribeStatus.subscribed) {
+            _isSubscribed = true;
+            _startHeartbeat();
+          } else if (status == RealtimeSubscribeStatus.channelError ||
+                     status == RealtimeSubscribeStatus.timedOut) {
+            _isSubscribed = false;
+            _stopHeartbeat();
+            if (_isReconnecting) return;
+            _isReconnecting = true;
             debugPrint('SupabaseService: channel error — will resubscribe in 5s');
             Future.delayed(const Duration(seconds: 5), () {
-              if (_onResubscribe != null) {
-                debugPrint('SupabaseService: triggering resubscribe');
-                _onResubscribe!();
-              }
+              _isReconnecting = false;
+              _onResubscribe?.call();
             });
+          } else if (status == RealtimeSubscribeStatus.closed) {
+            _isSubscribed = false;
+            _stopHeartbeat();
           }
         });
+  }
+ void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+    // Check every 30s — if channel silently died, trigger reconnect
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 55), (_) {
+      if (!_isSubscribed && _onResubscribe != null) {
+        debugPrint('SupabaseService: heartbeat detected dead channel — reconnecting');
+        _onResubscribe!();
+      }
+    });
+  }
+
+  void _stopHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
   }
 
   // Legacy methods — kept for backward compat, delegate to subscribeToAll
@@ -180,10 +206,13 @@ class SupabaseService {
   }
 
   void unsubscribeAll() {
+    _isReconnecting = false;
+    _isSubscribed = false;
+    _stopHeartbeat();
     _channel?.unsubscribe();
     _channel = null;
   }
-
+bool get isChannelHealthy => _isSubscribed && _channel != null;  // ← here
   // Legacy unsubscribe methods
   void unsubscribeFromMovements() => unsubscribeAll();
   void unsubscribeFromMasterData() {}  // no-op, single channel handles all

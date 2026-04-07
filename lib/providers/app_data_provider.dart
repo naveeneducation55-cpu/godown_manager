@@ -377,12 +377,29 @@ class AppDataProvider extends ChangeNotifier {
         'items:${_items.length} locations:${_locations.length} '
         'staff:${_staff.length} movements:${_movements.length}');
 
-    if (_staff.isEmpty && _items.isEmpty && _locations.isEmpty) {
+     if (_staff.isEmpty && _items.isEmpty && _locations.isEmpty) {
       debugPrint('AppDataProvider: fresh install detected');
       await _handleFreshInstall(db);
+    } else {
+      // Existing install — silently pull latest from remote in background
+      // User sees local data immediately, UI refreshes when pull completes
+      _backgroundRefresh();
     }
 
     _invalidateCaches();
+  }
+
+  void _backgroundRefresh() {
+    Future.delayed(const Duration(seconds: 2), () async {
+      try {
+        await SyncService.instance.backgroundPullAll();
+        await _reloadMasterData();
+        await _reloadMovements();
+        debugPrint('AppDataProvider: background refresh complete');
+      } catch (e) {
+        debugPrint('AppDataProvider._backgroundRefresh error: $e');
+      }
+    });
   }
 
   Future<void> _handleFreshInstall(DatabaseHelper db) async {

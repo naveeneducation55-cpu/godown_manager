@@ -31,6 +31,7 @@ import 'package:flutter/foundation.dart';
 import '../database/database_helper.dart';
 import '../config/app_config.dart';
 import 'supabase_service.dart';
+import 'package:intl/intl.dart';
 
 enum SyncStatus      { idle, syncing, done, error }
 enum SyncFirstResult { success, supabaseEmpty, unreachable }
@@ -112,12 +113,13 @@ class SyncService {
     _onMovementsSynced   = onMovementsSynced;
     _onMasterDataChanged = onMasterDataChanged;
     _onStockInvalidated  = onStockInvalidated;
-
+    _loadLastSyncAt();
     // Realtime — all incoming changes handled instantly, zero polling
     SupabaseService.instance.subscribeToAll(
       onMovementInsert:    _handleRemoteMovement,
       onMovementUpdate:    _handleRemoteMovement,
       onMasterDataChanged: _handleMasterDataChanged,
+      onResubscribe:       reconnectRealtime,   // ← wire the auto-reconnect
     );
 
     // Fallback pull-only — catches missed realtime events
@@ -141,7 +143,7 @@ class SyncService {
     });
 
     // On startup — push any pending from before app was closed
-    Future.delayed(const Duration(seconds: 2), pushNow);
+    Future.delayed(const Duration(seconds: 4), pushNow);
 
     debugPrint('SyncService: started — realtime + 5min fallback');
   }
@@ -153,6 +155,51 @@ class SyncService {
     _fallbackTimer   = null;
     _connectivitySub = null;
   }
+
+
+Future<void> _loadLastSyncAt() async {
+    try {
+      final saved = await DatabaseHelper.instance.getLastSyncAt();
+      if (saved != null) {
+        _lastSyncAt = saved;
+        debugPrint('SyncService: loaded lastSyncAt = $_lastSyncAt');
+      }
+    } catch (e) {
+      debugPrint('SyncService._loadLastSyncAt error: $e');
+    }
+  }
+
+  void _updateLastSyncAt() {
+    _updateLastSyncAt();
+    DatabaseHelper.instance.saveLastSyncAt(_lastSyncAt!);
+  }
+  
+  /// Called on app resume — tears down dead channel and re-subscribes fresh
+   bool _isReconnecting = false;
+
+  void reconnectRealtime({bool force = false}) {
+    if (!AppConfig.isSyncEnabled) return;
+    if (_isReconnecting) return;
+    
+    // Skip if channel is healthy and not forced
+    if (!force && SupabaseService.instance.isChannelHealthy) {
+      debugPrint('SyncService: channel healthy — skipping reconnect');
+      return;
+    }
+    _isReconnecting = true;
+    debugPrint('SyncService: reconnecting realtime channel');
+    SupabaseService.instance.unsubscribeAll();
+    _invalidateReachabilityCache();
+    SupabaseService.instance.subscribeToAll(
+      onMovementInsert:    _handleRemoteMovement,
+      onMovementUpdate:    _handleRemoteMovement,
+      onMasterDataChanged: _handleMasterDataChanged,
+      onResubscribe:       reconnectRealtime,
+    );
+    Future.delayed(const Duration(seconds: 3), () => _isReconnecting = false);
+    Future.delayed(const Duration(seconds: 2), () => _pullOnly());
+  }
+  
 
   void dispose() {
     stopAutoSync();
@@ -178,7 +225,7 @@ class SyncService {
     _isSyncing = true;
     try {
       await _pushPending();
-      _lastSyncAt = DateTime.now();
+      _updateLastSyncAt();
     } catch (e) {
       debugPrint('SyncService.pushNow error: $e');
     } finally {
@@ -209,15 +256,37 @@ class SyncService {
     if (!reachable) return;
 
     _isSyncing = true;
-    debugPrint('SyncService: fallback pull started');
+    String time = DateFormat('hh:mm a').format(DateTime.now());
+    debugPrint('SyncService: fallback pull started $time');
+    
+    debugPrint("Current Time: $time");
     try {
       await _pullMasterData();
       await _pullMovements();
-      _lastSyncAt = DateTime.now();
+      _updateLastSyncAt();
 
-      debugPrint('SyncService: fallback pull done');
+      debugPrint('SyncService: fallback pull done $time');
+
     } catch (e) {
       debugPrint('SyncService._pullOnly error: $e');
+    } finally {
+      _isSyncing = false;
+    }
+  }
+
+   Future<void> backgroundPullAll() async {
+    if (!AppConfig.isSyncEnabled) return;
+    if (_isSyncing) return;                  // ← respect the mutex
+    final reachable = await _isReachableCached();
+    if (!reachable) return;
+    _isSyncing = true;
+    try {
+      await _pullMasterDataFresh();
+      await _pullMovements();
+      _updateLastSyncAt();
+      debugPrint('SyncService.backgroundPullAll: done');
+    } catch (e) {
+      debugPrint('SyncService.backgroundPullAll error: $e');
     } finally {
       _isSyncing = false;
     }
@@ -250,7 +319,7 @@ class SyncService {
 
       final pulled = await _pullMovements();
 
-      _lastSyncAt = DateTime.now();
+      _updateLastSyncAt();
       _pushedCount = pushed;
 
       if (!silent) _setStatus(SyncStatus.done);
@@ -296,8 +365,34 @@ class SyncService {
   void _handleMasterDataChanged() {
     _masterDataDebounce?.cancel();
     _masterDataDebounce = Timer(const Duration(milliseconds: 500), () {
-      _pullMasterData().then((_) => _onMasterDataChanged?.call());
+      // Pass null = pull last 24h regardless of _lastSyncAt
+      // Ensures we never miss a record due to stale timestamp
+      _pullMasterDataFresh().then((_) => _onMasterDataChanged?.call());
     });
+  }
+
+  // Pull master data ignoring _lastSyncAt — used on realtime events
+  Future<void> _pullMasterDataFresh() async {
+    try {
+      final since = DateTime.now().subtract(const Duration(hours: 24));
+      final result = await SupabaseService.instance.pullMasterDataSince(since);
+      if (!result.isSuccess) return;
+
+      final data = result.data!;
+      final db   = DatabaseHelper.instance;
+
+      for (final row in data['items']     ?? []) { await db.upsertItemFromRemote(row); }
+      for (final row in data['locations'] ?? []) { await db.upsertLocationFromRemote(row); }
+      for (final row in data['staff']     ?? []) { await db.upsertStaffFromRemote(row); }
+
+      final total = (data['items']?.length     ?? 0) +
+                    (data['locations']?.length ?? 0) +
+                    (data['staff']?.length     ?? 0);
+
+      if (total > 0) debugPrint('SyncService: realtime master pull — $total records');
+    } catch (e) {
+      debugPrint('SyncService._pullMasterDataFresh error: $e');
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -387,8 +482,9 @@ class SyncService {
       }
 
       if (merged > 0) {
+        String time = DateFormat('hh:mm a').format(DateTime.now());
         _onStockInvalidated?.call();
-        debugPrint('SyncService: pulled $merged movements');
+        debugPrint('SyncService: pulled $merged movements $time');
       }
       return merged;
     } catch (e) {
@@ -459,7 +555,7 @@ class SyncService {
           'items:${items.length} locations:${locations.length} '
           'staff:${staff.length} movements:${movements.length}');
 
-     _lastSyncAt = DateTime.now();
+     _updateLastSyncAt();
       return SyncFirstResult.success;
 
     } catch (e) {

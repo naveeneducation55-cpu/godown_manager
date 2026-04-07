@@ -9,6 +9,8 @@ import 'screens/login/login_screen.dart';
 import 'screens/home/home_screen.dart';
 import 'services/supabase_service.dart';
 import 'config/app_config.dart';
+import 'services/sync_service.dart';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -22,11 +24,12 @@ void main() async {
   await SupabaseService.initialize();
 debugPrint('=== KEY: ${AppConfig.supabaseAnonKey.length} chars, enabled: ${AppConfig.isSyncEnabled}');
   final dataProvider = AppDataProvider();
-  await dataProvider.initialize();
+  // await dataProvider.initialize();
   dataProvider.startRealtimeSync();
-
+  dataProvider.initialize();
   runApp(
     MultiProvider(
+      
       providers: [
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
         ChangeNotifierProvider<AppDataProvider>.value(value: dataProvider),
@@ -43,11 +46,12 @@ class GodownApp extends StatefulWidget {
   State<GodownApp> createState() => _GodownAppState();
 }
 
-class _GodownAppState extends State<GodownApp> {
+class _GodownAppState extends State<GodownApp> with WidgetsBindingObserver {
 
   @override
   void initState() {
     super.initState();
+      WidgetsBinding.instance.addObserver(this);
     if (widget.savedStaffId != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
@@ -61,6 +65,22 @@ class _GodownAppState extends State<GodownApp> {
       });
     }
   }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      debugPrint('App resumed — reconnecting realtime + pushing pending');
+      SyncService.instance.reconnectRealtime();
+      SyncService.instance.pushNow();
+    }
+  }
+
 
   @override
   Widget build(BuildContext context) {
