@@ -155,6 +155,6 @@ Full bug log with root cause analysis documented in [`docs/`](./docs).
 
 Built by **NAVEEN KUMAR DUGAR**
 
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)]([https://linkedin.com/in/Naveen kumar Dugar](https://www.linkedin.com/in/naveen-kumar-dugar-b23713169/))
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)]([https://linkedin.com/in/Naveen kumar Dugar])
 [![Gmail](https://img.shields.io/badge/Gmail-D14836?style=for-the-badge&logo=gmail&logoColor=white)](mailto:nkumardugar@gmail.com)
 [![GitHub](https://img.shields.io/badge/GitHub-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/naveeneducation55-cpu)
