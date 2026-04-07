@@ -261,8 +261,8 @@ class _DateCard extends StatelessWidget {
     final t   = context.appTheme;
     final now = DateTime.now();
 
-    final weekdays = const ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-    final months   = const ['Jan','Feb','Mar','Apr','May','Jun',
+    const weekdays = const ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+    const months   = const ['Jan','Feb','Mar','Apr','May','Jun',
                              'Jul','Aug','Sep','Oct','Nov','Dec'];
 
     final dateStr =
@@ -286,7 +286,7 @@ class _DateCard extends StatelessWidget {
             width:  36,
             height: 36,
             decoration: BoxDecoration(
-              color:        t.primary.withOpacity(0.1),
+              color:        t.primary.withValues(alpha:0.1),
               borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
             ),
             child: Icon(
@@ -457,7 +457,7 @@ class _ActionButton extends StatelessWidget {
                 Icons.chevron_right_rounded,
                 size:  18,
                 color: isPrimary
-                    ? t.primaryFg.withOpacity(0.6)
+                    ? t.primaryFg.withValues(alpha:0.6)
                     : t.text3,
               ),
             ],

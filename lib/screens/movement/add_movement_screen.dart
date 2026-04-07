@@ -17,6 +17,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
   ItemModel?     _selectedItem;
   LocationModel? _selectedFrom;
   LocationModel? _selectedTo;
+  bool           _isRestock = false;
   bool           _isSaving = false;
 
   // Controllers — all disposed in dispose()
@@ -112,7 +113,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
       showError(context, 'Please select an item');
       return;
     }
-    if (_selectedFrom == null) {
+    if (_selectedFrom == null && !_isRestock) {
       showError(context, 'Please select a From location');
       return;
     }
@@ -120,7 +121,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
       showError(context, 'Please select a To location');
       return;
     }
-    if (_selectedFrom!.id == _selectedTo!.id) {
+    if (!_isRestock && _selectedFrom!.id == _selectedTo!.id) {
       showError(context, 'From and To cannot be the same location');
       return;
     }
@@ -139,9 +140,9 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
       final String staffId = data.currentStaff?.id ??
     (data.staff.isNotEmpty ? data.staff.first.id : '');
 
-      data.addMovement(
+      final ok = await data.addMovement(
         itemId:         _selectedItem!.id,
-        fromLocationId: _selectedFrom!.id,
+        fromLocationId: _isRestock ? 'SUPPLIER' : _selectedFrom!.id,
         toLocationId:   _selectedTo!.id,
         quantity:       qty,
         staffId:        staffId,
@@ -152,12 +153,16 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
 
       if (!mounted) return;
 
-      showSuccess(
-        context,
-        '$qty ${_selectedItem!.unit} of ${_selectedItem!.name} '
-        'added to ${_selectedTo!.name}',
-      );
-      _clearForm();
+      if (ok) {
+        showSuccess(
+          context,
+          '$qty ${_selectedItem!.unit} of ${_selectedItem!.name} '
+          'added to ${_selectedTo!.name}',
+        );
+        _clearForm();
+      } else {
+        showError(context, 'Not enough stock. Check available quantity.');
+      }
 
     } catch (e) {
       debugPrint('addMovement error: $e');
@@ -176,6 +181,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
       setState(() {
         _selectedFrom = null;
         _selectedTo   = null;
+        _isRestock    = false;
       });
     }
   }
@@ -183,7 +189,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
   bool get _canSave =>
       _selectedItem != null &&
       _qtyCtrl.text.trim().isNotEmpty &&
-      _selectedFrom != null &&
+      (_isRestock || _selectedFrom != null) &&
       _selectedTo   != null;
 
   String _timeNow() {
@@ -196,10 +202,41 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
 
   // ── Build ─────────────────────────────────────────────────────────────────────
   @override
-  Widget build(BuildContext context) {
+ Widget build(BuildContext context) {
     final t    = context.appTheme;
-    // Watch so dropdowns reflect any changes in items/locations
     final data = context.watch<AppDataProvider>();
+
+    // Re-resolve selected locations from live list on every build.
+    // Realtime sync replaces LocationModel instances with new objects.
+    // DropdownButton uses == (object identity) — stale ref causes assertion crash.
+    final locs  = data.locations;
+    final items = data.items;
+    if (_selectedItem != null) {
+      final fresh = items.where((i) => i.id == _selectedItem!.id).firstOrNull;
+      if (fresh != null && !identical(fresh, _selectedItem)) {
+        _selectedItem = fresh;
+        _itemCtrl.text = fresh.name;
+      } else if (fresh == null) {
+        _selectedItem = null; // item was deleted remotely
+        _itemCtrl.clear();
+      }
+    }
+    if (_selectedFrom != null) {
+      final fresh = locs.where((l) => l.id == _selectedFrom!.id).firstOrNull;
+      if (fresh != null && !identical(fresh, _selectedFrom)) {
+        _selectedFrom = fresh;
+      } else if (fresh == null) {
+        _selectedFrom = null; // location was deleted remotely
+      }
+    }
+    if (_selectedTo != null) {
+      final fresh = locs.where((l) => l.id == _selectedTo!.id).firstOrNull;
+      if (fresh != null && !identical(fresh, _selectedTo)) {
+        _selectedTo = fresh;
+      } else if (fresh == null) {
+        _selectedTo = null;
+      }
+    }
 
     return GestureDetector(
       onTap: () {
@@ -243,6 +280,53 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
                   const SizedBox(height: AppSpacing.xl),
 
                   const SectionLabel('Movement route'),
+
+                  // Restock toggle
+                  GestureDetector(
+                    onTap: () => setState(() {
+                      _isRestock    = !_isRestock;
+                      _selectedFrom = null;
+                    }),
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: AppSpacing.sm + 2),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+                      decoration: BoxDecoration(
+                        color: _isRestock
+                            ? t.primary.withValues(alpha:0.08)
+                            : t.surface,
+                        borderRadius: BorderRadius.circular(AppSpacing.radius),
+                        border: Border.all(
+                          color: _isRestock
+                              ? t.primary.withValues(alpha:0.4)
+                              : t.border,
+                          width: 0.8,
+                        ),
+                      ),
+                      child: Row(children: [
+                        Icon(
+                          _isRestock
+                              ? Icons.check_box_rounded
+                              : Icons.check_box_outline_blank_rounded,
+                          size: 18,
+                          color: _isRestock ? t.primary : t.text3,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('New stock arriving — add to existing item',
+                                style: AppFonts.body(
+                                    color: _isRestock ? t.primary : t.text)),
+                            Text('Use this instead of creating a new item',
+                                style: AppFonts.label(color: t.text3)),
+                          ],
+                        )),
+                      ]),
+                    ),
+                  ),
+
+                  if (!_isRestock)
                   _buildLocationField(
                     t:         t,
                     label:     'From',
@@ -252,7 +336,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
                     locations: data.locations,
                     exclude:   _selectedTo,
                     onChanged: (v) => setState(() => _selectedFrom = v),
-                    validator: (_) => _selectedFrom == null
+                    validator: (_) => (!_isRestock && _selectedFrom == null)
                         ? 'From location is required' : null,
                   ),
 
@@ -261,7 +345,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
                     child: Container(
                       width: 32, height: 32,
                       decoration: BoxDecoration(
-                        color: t.primary.withOpacity(0.08),
+                        color: t.primary.withValues(alpha:0.08),
                         borderRadius: BorderRadius.circular(99),
                       ),
                       child: Icon(
@@ -365,7 +449,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 8, vertical: 2),
                       decoration: BoxDecoration(
-                        color: t.primary.withOpacity(0.1),
+                        color: t.primary.withValues(alpha:0.1),
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Text(
@@ -405,7 +489,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
               border:       Border.all(color: t.border, width: 0.8),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(t.isDark ? 0.3 : 0.06),
+                  color: Colors.black.withValues(alpha:t.isDark ? 0.3 : 0.06),
                   blurRadius: 8,
                   offset: const Offset(0, 3),
                 ),
@@ -468,7 +552,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 7, vertical: 2),
                           decoration: BoxDecoration(
-                            color: t.primary.withOpacity(0.08),
+                            color: t.primary.withValues(alpha:0.08),
                             borderRadius: BorderRadius.circular(4),
                           ),
                           child: Text(
@@ -505,8 +589,8 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
           decoration: BoxDecoration(
             color: _selectedItem != null
-                ? t.primary.withOpacity(0.1)
-                : t.border.withOpacity(0.5),
+                ? t.primary.withValues(alpha:0.1)
+                : t.border.withValues(alpha:0.5),
             borderRadius: BorderRadius.circular(4),
           ),
           child: Text(
@@ -582,15 +666,15 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
       margin:  const EdgeInsets.only(bottom: AppSpacing.sm),
       padding: const EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
-        color: t.primary.withOpacity(0.05),
+        color: t.primary.withValues(alpha:0.05),
         borderRadius: BorderRadius.circular(AppSpacing.radius),
-        border: Border.all(color: t.primary.withOpacity(0.18), width: 0.8),
+        border: Border.all(color: t.primary.withValues(alpha:0.18), width: 0.8),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('PREVIEW',
-              style: AppFonts.labelStyle(color: t.primary.withOpacity(0.6))),
+              style: AppFonts.labelStyle(color: t.primary.withValues(alpha:0.6))),
           const SizedBox(height: 8),
           Text.rich(TextSpan(children: [
             TextSpan(
@@ -615,7 +699,9 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
                 size: 13, color: t.text3),
             const SizedBox(width: 4),
             Text(
-              'moved from ${_selectedFrom!.name}',
+              _isRestock
+                  ? 'incoming from Supplier'
+                  : 'moved from ${_selectedFrom!.name}',
               style: AppFonts.monoStyle(size: 12, color: t.text3),
             ),
           ]),

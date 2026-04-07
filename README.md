@@ -1,3 +1,4 @@
+
 # Godown Manager
 
 Real-time inventory management app built for Sri Baba Traders — a wholesale textile business running 9 warehouses across 7 staff devices.
@@ -158,3 +159,4 @@ Built by **NAVEEN KUMAR DUGAR**
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/naveen-kumar-dugar-b23713169/)
 [![Gmail](https://img.shields.io/badge/Gmail-D14836?style=for-the-badge&logo=gmail&logoColor=white)](mailto:nkumardugar@gmail.com)
 [![GitHub](https://img.shields.io/badge/GitHub-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/naveeneducation55-cpu)
+

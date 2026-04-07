@@ -16,7 +16,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
   String      _search     = '';
   _DateFilter _dateFilter = _DateFilter.all;
   final _searchCtrl = TextEditingController();
-
   @override
   void dispose() {
     _searchCtrl.dispose();
@@ -239,7 +238,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
 }
 
 // ─── Single log row ───────────────────────────────────────────────────────────
-class _LogRow extends StatelessWidget {
+class _LogRow extends StatefulWidget {
   final MovementModel   movement;
   final AppDataProvider data;
   final bool            isLast;
@@ -251,21 +250,64 @@ class _LogRow extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
+  State<_LogRow> createState() => _LogRowState();
+}
+
+class _LogRowState extends State<_LogRow> {
+
+  Future<void> _confirmDelete(BuildContext context) async {
     final t = context.appTheme;
-    final m = movement;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: t.surface,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppSpacing.radius)),
+        title: Text('Delete movement?',
+            style: AppFonts.heading(color: t.text)),
+        content: Text(
+          'This will remove the movement and update stock on all devices. '
+          'This cannot be undone.',
+          style: AppFonts.body(color: t.text2),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text('Cancel', style: AppFonts.body(color: t.text3)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text('Delete',
+                style: AppFonts.body(color: t.error)
+                    .copyWith(fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final ok = await widget.data.deleteMovement(widget.movement.id);
+    if (!mounted) return;
+    if (!ok) showError(context, 'Failed to delete. Try again.');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t       = context.appTheme;
+    final m       = widget.movement;
+    final isAdmin = widget.data.isAdmin;
 
     // Resolve names safely
-    final item  = data.getItemById(m.itemId);
-    final from  = data.getLocationById(m.fromLocationId);
-    final to    = data.getLocationById(m.toLocationId);
-    final staff = data.staff.firstWhere(
+    final item  = widget.data.getItemById(m.itemId);
+    final from  = widget.data.getLocationById(m.fromLocationId);
+    final to    = widget.data.getLocationById(m.toLocationId);
+    final staff = widget.data.staff.firstWhere(
       (s) => s.id == m.staffId,
       orElse: () => StaffModel(
           id: '', name: 'Unknown', pin: '', createdAt: DateTime.now()),
     );
     final editedByStaff = m.editedBy != null
-        ? data.staff.firstWhere(
+        ? widget.data.staff.firstWhere(
             (s) => s.id == m.editedBy,
             orElse: () => StaffModel(
                 id: '', name: 'Unknown', pin: '',
@@ -273,101 +315,131 @@ class _LogRow extends StatelessWidget {
           )
         : null;
 
-    // Quantity display
     final qty = m.quantity == m.quantity.truncateToDouble()
         ? m.quantity.toInt().toString()
         : m.quantity.toStringAsFixed(1);
 
-    // From label — 'SUPPLIER' means opening stock from external source
     final fromName = m.fromLocationId == 'SUPPLIER'
         ? 'Supplier'
         : (from?.name ?? '—');
 
-    // Opening stock movements (SUPPLIER) cannot be edited
     final canEdit = m.fromLocationId != 'SUPPLIER';
 
-    return GestureDetector(
+    // ── Row content ──────────────────────────────────────────────────────────
+    final rowContent = GestureDetector(
       onTap: canEdit
-          ? () => _showEditSheet(context, m, data)
+          ? () => _showEditSheet(context, m, widget.data)
           : null,
       child: Container(
-      decoration: isLast
-          ? null
-          : BoxDecoration(
-              border: Border(
-                  bottom: BorderSide(color: t.border, width: 0.5))),
-      padding: const EdgeInsets.symmetric(vertical: 11),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Main log line
-          Text.rich(
-            TextSpan(children: [
-              TextSpan(
-                text:  _fmtTime(m.createdAt),
-                style: AppFonts.monoStyle(size: 12, color: t.text3),
-              ),
-              TextSpan(
-                text:  '  ·  ',
-                style: AppFonts.monoStyle(size: 12, color: t.border),
-              ),
-              TextSpan(
-                text:  staff.name,
-                style: AppFonts.monoStyle(
-                    size:   12,
-                    color:  t.text2,
-                    weight: FontWeight.w600),
-              ),
-              TextSpan(
-                text:  '  ·  ',
-                style: AppFonts.monoStyle(size: 12, color: t.border),
-              ),
-              TextSpan(
-                text:  '$qty ${item?.unit ?? ''}',
-                style: AppFonts.monoStyle(
-                    size:   13,
-                    color:  t.primary,
-                    weight: FontWeight.w700),
-              ),
-              TextSpan(
-                text:  ' ${item?.name ?? '—'}',
-                style: AppFonts.monoStyle(
-                    size:   13,
-                    color:  t.text,
-                    weight: FontWeight.w700),
-              ),
-              TextSpan(
-                text:  '  ·  ',
-                style: AppFonts.monoStyle(size: 12, color: t.border),
-              ),
-              TextSpan(
-                text:  '$fromName → ${to?.name ?? '—'}',
-                style: AppFonts.monoStyle(size: 12, color: t.text2),
-              ),
-            ]),
-            softWrap: true,
-          ),
-
-          // Edited line
-          if (m.edited) ...[
-            const SizedBox(height: 4),
-            Text.rich(TextSpan(children: [
-              TextSpan(
-                text:  '✎ ',
-                style: AppFonts.monoStyle(size: 11, color: t.warnFg),
-              ),
-              TextSpan(
-                text: editedByStaff != null
-                    ? 'edited by ${editedByStaff.name}'
-                    : 'edited',
-                style: AppFonts.monoStyle(size: 11, color: t.warnFg),
-              ),
-            ])),
+        decoration: widget.isLast
+            ? null
+            : BoxDecoration(
+                border: Border(
+                    bottom: BorderSide(color: t.border, width: 0.5))),
+        padding: const EdgeInsets.symmetric(vertical: 11),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text.rich(
+              TextSpan(children: [
+                TextSpan(
+                  text:  _fmtTime(m.createdAt),
+                  style: AppFonts.monoStyle(size: 12, color: t.text3),
+                ),
+                TextSpan(
+                  text:  '  ·  ',
+                  style: AppFonts.monoStyle(size: 12, color: t.border),
+                ),
+                TextSpan(
+                  text:  staff.name,
+                  style: AppFonts.monoStyle(
+                      size:   12,
+                      color:  t.text2,
+                      weight: FontWeight.w600),
+                ),
+                TextSpan(
+                  text:  '  ·  ',
+                  style: AppFonts.monoStyle(size: 12, color: t.border),
+                ),
+                TextSpan(
+                  text:  '$qty ${item?.unit ?? ''}',
+                  style: AppFonts.monoStyle(
+                      size:   13,
+                      color:  t.primary,
+                      weight: FontWeight.w700),
+                ),
+                TextSpan(
+                  text:  ' ${item?.name ?? '—'}',
+                  style: AppFonts.monoStyle(
+                      size:   13,
+                      color:  t.text,
+                      weight: FontWeight.w700),
+                ),
+                TextSpan(
+                  text:  '  ·  ',
+                  style: AppFonts.monoStyle(size: 12, color: t.border),
+                ),
+                TextSpan(
+                  text:  '$fromName → ${to?.name ?? '—'}',
+                  style: AppFonts.monoStyle(size: 12, color: t.text2),
+                ),
+              ]),
+              softWrap: true,
+            ),
+            if (m.edited) ...[
+              const SizedBox(height: 4),
+              Text.rich(TextSpan(children: [
+                TextSpan(
+                  text:  '✎ ',
+                  style: AppFonts.monoStyle(size: 11, color: t.warnFg),
+                ),
+                TextSpan(
+                  text: editedByStaff != null
+                      ? 'edited by ${editedByStaff.name}'
+                      : 'edited',
+                  style: AppFonts.monoStyle(size: 11, color: t.warnFg),
+                ),
+              ])),
+            ],
           ],
-        ],
+        ),
       ),
-    ), // Container
-    ); // GestureDetector
+    );
+
+    // ── Wrap with Dismissible for admin only ─────────────────────────────────
+    if (!isAdmin) return rowContent;
+
+    return Dismissible(
+      key:       ValueKey(m.id),
+      direction: DismissDirection.endToStart,
+      // confirmDismiss handles dialog + deletion — always return false
+      // so the widget is removed only via provider (state-driven, not widget-driven)
+      confirmDismiss: (_) async {
+        await _confirmDelete(context);
+        return false;
+      },
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding:   const EdgeInsets.only(right: AppSpacing.lg),
+        decoration: BoxDecoration(
+          color: t.error,
+          border: widget.isLast
+              ? null
+              : Border(bottom: BorderSide(color: t.error, width: 0.5)),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.delete_outline_rounded,
+                color: Colors.white, size: 22),
+            const SizedBox(height: 3),
+            Text('Delete',
+                style: AppFonts.monoStyle(size: 11, color: Colors.white)),
+          ],
+        ),
+      ),
+      child: rowContent,
+    );
   }
 
   static String _fmtTime(DateTime d) {
@@ -406,6 +478,7 @@ class _EditSheetState extends State<_EditSheet> {
   final _formKey = GlobalKey<FormState>();
   LocationModel? _fromLoc;
   LocationModel? _toLoc;
+  ItemModel?     _selectedItem;
   bool _isSaving = false;
 
   @override
@@ -417,9 +490,9 @@ class _EditSheetState extends State<_EditSheet> {
             ? m.quantity.toInt().toString()
             : m.quantity.toStringAsFixed(1));
     _remarkCtrl = TextEditingController(text: m.remark ?? '');
-    // Pre-select current from/to
-    _fromLoc = widget.data.getLocationById(m.fromLocationId);
-    _toLoc   = widget.data.getLocationById(m.toLocationId);
+    _fromLoc      = widget.data.getLocationById(m.fromLocationId);
+    _toLoc        = widget.data.getLocationById(m.toLocationId);
+    _selectedItem = widget.data.getItemById(m.itemId);
   }
 
   @override
@@ -431,8 +504,9 @@ class _EditSheetState extends State<_EditSheet> {
 
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    if (_fromLoc == null) { showError(context, 'Select From location'); return; }
-    if (_toLoc   == null) { showError(context, 'Select To location');   return; }
+    if (_selectedItem == null) { showError(context, 'Select an item');         return; }
+    if (_fromLoc == null)      { showError(context, 'Select From location');   return; }
+    if (_toLoc   == null)      { showError(context, 'Select To location');     return; }
     if (_fromLoc!.id == _toLoc!.id) {
       showError(context, 'From and To cannot be the same');
       return;
@@ -441,8 +515,36 @@ class _EditSheetState extends State<_EditSheet> {
     setState(() => _isSaving = true);
 
     final qty = double.tryParse(_qtyCtrl.text.trim()) ?? 0;
-    final ok  = await widget.data.editMovement(
+
+    // Stock validation
+    if (_fromLoc!.id != 'SUPPLIER') {
+      final stockList  = widget.data.getStock();
+      final stockEntry = stockList.where((s) =>
+          s.item.id     == _selectedItem!.id &&
+          s.location.id == _fromLoc!.id,
+      ).toList();
+      final currentBalance = stockEntry.isEmpty ? 0.0 : stockEntry.first.balance;
+      // If item or from-location changed, no original qty to add back
+      final sameItem = _selectedItem!.id == widget.movement.itemId;
+      final sameFrom = _fromLoc!.id == widget.movement.fromLocationId;
+      final originalQty = (sameItem && sameFrom) ? widget.movement.quantity : 0.0;
+      final available = currentBalance + originalQty;
+
+      if (qty > available) {
+        showError(
+          context,
+          'Not enough stock. Available: '
+          '${available % 1 == 0 ? available.toInt() : available.toStringAsFixed(1)} '
+          '${_selectedItem!.unit} in ${_fromLoc!.name}',
+        );
+        setState(() => _isSaving = false);
+        return;
+      }
+    }
+
+    final ok = await widget.data.editMovement(
       movementId:     widget.movement.id,
+      itemId:         _selectedItem!.id,
       quantity:       qty,
       fromLocationId: _fromLoc!.id,
       toLocationId:   _toLoc!.id,
@@ -463,11 +565,33 @@ class _EditSheetState extends State<_EditSheet> {
   }
 
   @override
-  Widget build(BuildContext context) {
+ Widget build(BuildContext context) {
     final t         = context.appTheme;
     final bot       = MediaQuery.of(context).viewInsets.bottom;
     final locations = widget.data.locations;
-    final item      = widget.data.getItemById(widget.movement.itemId);
+    final items     = widget.data.items;
+
+    // Re-resolve from live list by ID on every build.
+    // After realtime sync, list rebuilds with new object instances.
+    // Dropdown compares by == (object identity) — stale reference = crash.
+    final itemId = _selectedItem?.id;
+    final fromId = _fromLoc?.id;
+    final toId   = _toLoc?.id;
+    if (itemId != null) {
+      final fresh = items.firstWhere(
+        (i) => i.id == itemId, orElse: () => _selectedItem!);
+      if (!identical(fresh, _selectedItem)) _selectedItem = fresh;
+    }
+    if (fromId != null) {
+      final fresh = locations.firstWhere(
+        (l) => l.id == fromId, orElse: () => _fromLoc!);
+      if (!identical(fresh, _fromLoc)) _fromLoc = fresh;
+    }
+    if (toId != null) {
+      final fresh = locations.firstWhere(
+        (l) => l.id == toId, orElse: () => _toLoc!);
+      if (!identical(fresh, _toLoc)) _toLoc = fresh;
+    }
 
     return Container(
       decoration: BoxDecoration(
@@ -493,38 +617,34 @@ class _EditSheetState extends State<_EditSheet> {
             )),
             const SizedBox(height: AppSpacing.md),
 
-            // Title + item name (fixed — cannot change)
+            // Title
             Row(children: [
-              Expanded(child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Edit Movement',
-                      style: AppFonts.heading(color: t.text)),
-                  const SizedBox(height: 2),
-                  // Item is fixed — shown as read-only label
-                  Row(children: [
-                    Icon(Icons.inventory_2_outlined, size: 12, color: t.text3),
-                    const SizedBox(width: 4),
-                    Text(item?.name ?? '—',
-                        style: AppFonts.monoStyle(size: 11, color: t.text3)),
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: t.warnBg,
-                        borderRadius: BorderRadius.circular(3),
-                      ),
-                      child: Text('item cannot change',
-                          style: AppFonts.monoStyle(size: 9, color: t.warnFg)),
-                    ),
-                  ]),
-                ],
-              )),
+              Expanded(child: Text('Edit Movement',
+                  style: AppFonts.heading(color: t.text))),
               GestureDetector(
                 onTap: () => Navigator.of(context).pop(),
                 child: Icon(Icons.close_rounded, size: 20, color: t.text3),
               ),
             ]),
+            const SizedBox(height: AppSpacing.md),
+
+            // Item selector
+            DropdownButtonFormField<ItemModel>(
+              initialValue:         _selectedItem,
+              dropdownColor: t.surface,
+              style:         AppFonts.body(color: t.text),
+              decoration: InputDecoration(
+                labelText:  'Item',
+                prefixIcon: Icon(Icons.inventory_2_outlined, size: 18, color: t.text3),
+              ),
+              icon: Icon(Icons.keyboard_arrow_down_rounded, color: t.text3),
+              items: items.map((i) => DropdownMenuItem(
+                value: i,
+                child: Text(i.name, style: AppFonts.body(color: t.text)),
+              )).toList(),
+              onChanged: (v) => setState(() => _selectedItem = v),
+              validator: (_) => _selectedItem == null ? 'Select an item' : null,
+            ),
             const SizedBox(height: AppSpacing.lg),
 
             // Quantity
@@ -535,14 +655,14 @@ class _EditSheetState extends State<_EditSheet> {
               decoration: InputDecoration(
                 labelText:  'Quantity',
                 prefixIcon: Icon(Icons.scale_outlined, size: 18, color: t.text3),
-                suffix: item != null
+                suffix: _selectedItem != null
                     ? Container(
                         padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                         decoration: BoxDecoration(
                           color: t.primary.withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(4),
                         ),
-                        child: Text(item.unit,
+                        child: Text(_selectedItem!.unit,
                             style: AppFonts.monoStyle(size: 11, color: t.primary)),
                       )
                     : null,
@@ -558,7 +678,7 @@ class _EditSheetState extends State<_EditSheet> {
 
             // From location
             DropdownButtonFormField<LocationModel>(
-              value:         _fromLoc,
+              initialValue: locations.any((l) => l.id == _fromLoc?.id) ? _fromLoc : null,
               dropdownColor: t.surface,
               style:         AppFonts.body(color: t.text),
               decoration: InputDecoration(
@@ -586,7 +706,7 @@ class _EditSheetState extends State<_EditSheet> {
 
             // To location
             DropdownButtonFormField<LocationModel>(
-              value:         _toLoc,
+              initialValue: locations.any((l) => l.id == _toLoc?.id) ? _toLoc : null,
               dropdownColor: t.surface,
               style:         AppFonts.body(color: t.text),
               decoration: InputDecoration(
