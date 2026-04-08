@@ -257,6 +257,86 @@ class _LogRowState extends State<_LogRow> {
 
   Future<void> _confirmDelete(BuildContext context) async {
     final t = context.appTheme;
+
+    // Block delete of SUPPLIER movements
+    if (widget.movement.fromLocationId == 'SUPPLIER') {
+      await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: t.surface,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppSpacing.radius)),
+          title: Text('Cannot Delete',
+              style: AppFonts.heading(color: t.text)),
+          content: Text(
+            'Opening stock entries cannot be deleted — they are the '
+            'base for all stock calculations.\n\n'
+            'To correct an error, edit the quantity directly.',
+            style: AppFonts.body(color: t.text2),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: Text('OK', style: AppFonts.body(color: t.primary)),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    // Stock consistency check for regular movements
+    // Deleting a movement that took stock FROM a location
+    // effectively adds that qty back — safe.
+    // Deleting a movement that brought stock TO a location
+    // removes that qty — could make dependent locations go negative.
+    final m     = widget.movement;
+    final stock = widget.data.getStock();
+
+    // Check if destination location has enough stock to absorb this deletion
+    final toEntry = stock.where((s) =>
+        s.item.id     == m.itemId &&
+        s.location.id == m.toLocationId,
+    ).toList();
+
+    final availableAtDest = toEntry.isEmpty ? 0.0 : toEntry.first.balance;
+
+    if (availableAtDest < m.quantity) {
+      final item   = widget.data.getItemById(m.itemId);
+      final toLoc  = widget.data.getLocationById(m.toLocationId);
+      final qtyStr = m.quantity == m.quantity.truncateToDouble()
+          ? m.quantity.toInt().toString()
+          : m.quantity.toStringAsFixed(1);
+      final availStr = availableAtDest == availableAtDest.truncateToDouble()
+          ? availableAtDest.toInt().toString()
+          : availableAtDest.toStringAsFixed(1);
+
+      await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: t.surface,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppSpacing.radius)),
+          title: Text('Cannot Delete',
+              style: AppFonts.heading(color: t.text)),
+          content: Text(
+            '${item?.name ?? 'Item'} has only $availStr ${item?.unit ?? ''} '
+            'remaining in ${toLoc?.name ?? 'destination'}.\n\n'
+            'Deleting this movement would remove $qtyStr ${item?.unit ?? ''} '
+            'and make the stock negative.\n\n'
+            'Move or edit later movements first.',
+            style: AppFonts.body(color: t.text2),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: Text('OK', style: AppFonts.body(color: t.primary)),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
     final confirmed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -322,14 +402,17 @@ class _LogRowState extends State<_LogRow> {
     final fromName = m.fromLocationId == 'SUPPLIER'
         ? 'Supplier'
         : (from?.name ?? '—');
-
-    final canEdit = m.fromLocationId != 'SUPPLIER';
+// SUPPLIER movements: allow edit (qty/item only, no location change)
+    // Regular movements: allow edit only if not from supplier
+    
+    final isSupplierMovement = m.fromLocationId == 'SUPPLIER';
 
     // ── Row content ──────────────────────────────────────────────────────────
     final rowContent = GestureDetector(
-      onTap: canEdit
-          ? () => _showEditSheet(context, m, widget.data)
-          : null,
+      onTap: () => _showEditSheet(
+          context, m, widget.data,
+          supplierOnly: isSupplierMovement,
+      ),
       child: Container(
         decoration: widget.isLast
             ? null
@@ -454,20 +537,31 @@ class _LogRowState extends State<_LogRow> {
 void _showEditSheet(
   BuildContext      context,
   MovementModel     movement,
-  AppDataProvider   data,
-) {
+  AppDataProvider   data, {
+  bool supplierOnly = false,
+}) {
   showModalBottomSheet(
     context:            context,
     isScrollControlled: true,
     backgroundColor:    Colors.transparent,
-    builder: (_) => _EditSheet(movement: movement, data: data),
+    builder: (_) => _EditSheet(
+        movement:     movement,
+        data:         data,
+        supplierOnly: supplierOnly,
+    ),
   );
 }
 
 class _EditSheet extends StatefulWidget {
   final MovementModel   movement;
   final AppDataProvider data;
-  const _EditSheet({required this.movement, required this.data});
+  final bool            supplierOnly;
+  const _EditSheet({
+    required this.movement,
+    required this.data,
+    this.supplierOnly = false,
+  });
+
   @override
   State<_EditSheet> createState() => _EditSheetState();
 }
@@ -677,60 +771,76 @@ class _EditSheetState extends State<_EditSheet> {
             const SizedBox(height: AppSpacing.md),
 
             // From location
-            DropdownButtonFormField<LocationModel>(
-              initialValue: locations.any((l) => l.id == _fromLoc?.id) ? _fromLoc : null,
-              dropdownColor: t.surface,
-              style:         AppFonts.body(color: t.text),
-              decoration: InputDecoration(
-                labelText:  'From',
-                prefixIcon: Icon(Icons.output_rounded, size: 18, color: t.text3),
+           // From location — locked for supplier movements
+            if (widget.supplierOnly)
+              _LockedField(
+                label: 'From',
+                value: 'Supplier',
+                icon:  Icons.local_shipping_outlined,
+                t:     t,
+              )
+            else
+              DropdownButtonFormField<LocationModel>(
+                initialValue: locations.any((l) => l.id == _fromLoc?.id) ? _fromLoc : null,
+                dropdownColor: t.surface,
+                style:         AppFonts.body(color: t.text),
+                decoration: InputDecoration(
+                  labelText:  'From',
+                  prefixIcon: Icon(Icons.output_rounded, size: 18, color: t.text3),
+                ),
+                icon: Icon(Icons.keyboard_arrow_down_rounded, color: t.text3),
+                items: locations
+                    .where((l) => _toLoc == null || l.id != _toLoc!.id)
+                    .map((l) => DropdownMenuItem(
+                      value: l,
+                      child: Row(children: [
+                        Icon(l.type == 'shop'
+                            ? Icons.storefront_outlined
+                            : Icons.warehouse_outlined,
+                            size: 14, color: t.text3),
+                        const SizedBox(width: 8),
+                        Text(l.name, style: AppFonts.body(color: t.text)),
+                      ]),
+                    )).toList(),
+                onChanged: (v) => setState(() => _fromLoc = v),
+                validator: (_) => _fromLoc == null ? 'Required' : null,
               ),
-              icon: Icon(Icons.keyboard_arrow_down_rounded, color: t.text3),
-              items: locations
-                  .where((l) => _toLoc == null || l.id != _toLoc!.id)
-                  .map((l) => DropdownMenuItem(
-                    value: l,
-                    child: Row(children: [
-                      Icon(l.type == 'shop'
-                          ? Icons.storefront_outlined
-                          : Icons.warehouse_outlined,
-                          size: 14, color: t.text3),
-                      const SizedBox(width: 8),
-                      Text(l.name, style: AppFonts.body(color: t.text)),
-                    ]),
-                  )).toList(),
-              onChanged: (v) => setState(() => _fromLoc = v),
-              validator: (_) => _fromLoc == null ? 'Required' : null,
-            ),
             const SizedBox(height: AppSpacing.sm),
 
-            // To location
-            DropdownButtonFormField<LocationModel>(
-              initialValue: locations.any((l) => l.id == _toLoc?.id) ? _toLoc : null,
-              dropdownColor: t.surface,
-              style:         AppFonts.body(color: t.text),
-              decoration: InputDecoration(
-                labelText:  'To',
-                prefixIcon: Icon(Icons.input_rounded, size: 18, color: t.text3),
+            // To location — locked for supplier movements
+            if (widget.supplierOnly)
+              _LockedField(
+                label: 'To',
+                value: _toLoc?.name ?? '—',
+                icon:  Icons.warehouse_outlined,
+                t:     t,
+              )
+            else
+              DropdownButtonFormField<LocationModel>(
+                initialValue: locations.any((l) => l.id == _toLoc?.id) ? _toLoc : null,
+                dropdownColor: t.surface,
+                style:         AppFonts.body(color: t.text),
+                decoration: InputDecoration(
+                  labelText:  'To',
+                  prefixIcon: Icon(Icons.input_rounded, size: 18, color: t.text3),
+                ),
+                icon: Icon(Icons.keyboard_arrow_down_rounded, color: t.text3),
+                items: locations
+                    .where((l) => _fromLoc == null || l.id != _fromLoc!.id)
+                    .map((l) => DropdownMenuItem(
+                      value: l,
+                      child: Row(children: [
+                        Icon(l.type == 'shop'
+                            ? Icons.storefront_outlined
+                            : Icons.warehouse_outlined,
+                            size: 14, color: t.text3),
+                        const SizedBox(width: 8),
+                        Text(l.name, style: AppFonts.body(color: t.text)),
+                      ]),
+                    )).toList(),
+                onChanged: (v) => setState(() => _toLoc = v),
+                validator: (_) => _toLoc == null ? 'Required' : null,
               ),
-              icon: Icon(Icons.keyboard_arrow_down_rounded, color: t.text3),
-              items: locations
-                  .where((l) => _fromLoc == null || l.id != _fromLoc!.id)
-                  .map((l) => DropdownMenuItem(
-                    value: l,
-                    child: Row(children: [
-                      Icon(l.type == 'shop'
-                          ? Icons.storefront_outlined
-                          : Icons.warehouse_outlined,
-                          size: 14, color: t.text3),
-                      const SizedBox(width: 8),
-                      Text(l.name, style: AppFonts.body(color: t.text)),
-                    ]),
-                  )).toList(),
-              onChanged: (v) => setState(() => _toLoc = v),
-              validator: (_) => _toLoc == null ? 'Required' : null,
-            ),
-            const SizedBox(height: AppSpacing.md),
 
             // Remark
             TextFormField(
@@ -760,6 +870,48 @@ class _EditSheetState extends State<_EditSheet> {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _LockedField extends StatelessWidget {
+  final String             label;
+  final String             value;
+  final IconData           icon;
+  final AppThemeExtension  t;
+
+  const _LockedField({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.t,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.md, vertical: 14),
+      decoration: BoxDecoration(
+        color:        t.border.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+        border:       Border.all(color: t.border, width: 0.8),
+      ),
+      child: Row(children: [
+        Icon(icon, size: 18, color: t.text3),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label,
+                style: AppFonts.label(color: t.text3, size: 11)),
+            const SizedBox(height: 2),
+            Text(value,
+                style: AppFonts.body(color: t.text2)),
+          ],
+        )),
+        Icon(Icons.lock_outline_rounded, size: 14, color: t.text3),
+      ]),
     );
   }
 }

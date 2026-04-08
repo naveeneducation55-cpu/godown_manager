@@ -24,7 +24,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/foundation.dart';
 import '../config/app_config.dart';
 
-import 'package:intl/intl.dart';
 // ── Result wrapper — no exceptions reach callers ──────────────────────────────
 class SyncResult<T> {
   final T?      data;
@@ -102,8 +101,10 @@ class SupabaseService {
     _onResubscribe = onResubscribe;
     _channel?.unsubscribe();
 
+    final channelName = 'changes_${DateTime.now().millisecondsSinceEpoch}';
+    debugPrint('SupabaseService: subscribing channel $channelName');
     _channel = _client
-        .channel('all_changes')
+        .channel(channelName)
         // Movements — INSERT + UPDATE
         .onPostgresChanges(
           event:  PostgresChangeEvent.insert,
@@ -249,7 +250,7 @@ bool get isChannelHealthy => _isSubscribed && _channel != null;  // ← here
       final results  = await Future.wait([
         _client.from('items')    .select().gte('updated_at', sinceStr).timeout(const Duration(seconds: 8)),
         _client.from('locations').select().gte('updated_at', sinceStr).timeout(const Duration(seconds: 8)),
-        _client.from('staff').select().gte('created_at', sinceStr).timeout(const Duration(seconds: 8)),
+       _client.from('staff').select().timeout(const Duration(seconds: 8)),
       ]);
       return SyncResult.ok({
         'items':     List<Map<String,dynamic>>.from(results[0]),
@@ -326,16 +327,24 @@ bool get isChannelHealthy => _isSubscribed && _channel != null;  // ← here
   // Checkpoint 2: Batch size increased to 50 (was 10) — fewer HTTP calls
   // ═══════════════════════════════════════════════════════════════════════════
 
-  Future<SyncResult<int>> pushMovements(
+ Future<SyncResult<int>> pushMovements(
     List<Map<String,dynamic>> movements,
   ) async {
     if (movements.isEmpty) return const SyncResult.ok(0);
     int pushed = 0;
     const batchSize = 50;
+
+    // Separate deleted from active — deleted need explicit update
+    final deleted = movements.where((m) => m['is_deleted'] == true).toList();
+    final active  = movements.where((m) => m['is_deleted'] != true).toList();
+
+    debugPrint('pushMovements: total=${movements.length} active=${active.length} deleted=${deleted.length}');
+
     try {
-      for (int i = 0; i < movements.length; i += batchSize) {
-        final batch = movements.sublist(
-          i, (i + batchSize).clamp(0, movements.length),
+      // Push active movements via upsert
+      for (int i = 0; i < active.length; i += batchSize) {
+        final batch = active.sublist(
+          i, (i + batchSize).clamp(0, active.length),
         );
         await _client
             .from('movements')
@@ -343,6 +352,27 @@ bool get isChannelHealthy => _isSubscribed && _channel != null;  // ← here
             .timeout(const Duration(seconds: 12));
         pushed += batch.length;
       }
+
+      // Push deleted movements — explicit update to ensure is_deleted reaches Supabase
+      for (final m in deleted) {
+        try {
+          await _client
+              .from('movements')
+              .update({
+                'is_deleted': true,
+                'edited_by':  m['edited_by'],
+                'updated_at': m['updated_at'],
+                'sync_status': 'synced',
+              })
+              .eq('movement_id', m['movement_id'])
+              .timeout(const Duration(seconds: 8));
+          pushed++;
+          debugPrint('pushMovements: soft-deleted ${m['movement_id']} on Supabase ✓');
+        } catch (e) {
+          debugPrint('pushMovements: failed to delete ${m['movement_id']} — $e');
+        }
+      }
+
       return SyncResult.ok(pushed);
     } catch (e) {
       return SyncResult.err('pushMovements: $e — pushed $pushed before error');

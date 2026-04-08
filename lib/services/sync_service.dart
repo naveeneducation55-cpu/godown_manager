@@ -87,6 +87,14 @@ class SyncService {
     _reachableCacheTime = null;
   }
 
+ DateTime _effectiveSince() {
+    final now        = DateTime.now();
+    final startOfDay = DateTime(now.year, now.month, now.day);
+    if (_lastSyncAt == null) return startOfDay;
+    final fromLastSync = _lastSyncAt!.subtract(const Duration(minutes: 5));
+    return fromLastSync.isAfter(startOfDay) ? fromLastSync : startOfDay;
+  }
+
   // ── Master data dirty flag ─────────────────────────────────────────────────
   bool      _masterDataDirty = true;
   DateTime? _lastMasterPush;
@@ -170,7 +178,7 @@ Future<void> _loadLastSyncAt() async {
   }
 
   void _updateLastSyncAt() {
-    _updateLastSyncAt();
+    _lastSyncAt = DateTime.now();
     DatabaseHelper.instance.saveLastSyncAt(_lastSyncAt!);
   }
   
@@ -214,7 +222,12 @@ Future<void> _loadLastSyncAt() async {
   // Pushes pending queue immediately — other devices see it in < 2 seconds
   Future<void> pushNow() async {
     if (!AppConfig.isSyncEnabled) return;
-    if (_isSyncing) return; // already running — pending will be included
+     if (_isSyncing) {
+      // Mutex held — retry after current operation finishes
+      // Ensures edits/deletes are never silently dropped
+      Future.delayed(const Duration(seconds: 2), pushNow);
+      return;
+    }
 
     final reachable = await _isReachableCached();
     if (!reachable) {
@@ -250,7 +263,10 @@ Future<void> _loadLastSyncAt() async {
 
   Future<void> _pullOnly() async {
     if (!AppConfig.isSyncEnabled) return;
-    if (_isSyncing) return;
+     if (_isSyncing) {
+      Future.delayed(const Duration(seconds: 2), pushNow);
+      return;
+    }
 
     final reachable = await _isReachableCached();
     if (!reachable) return;
@@ -276,12 +292,15 @@ Future<void> _loadLastSyncAt() async {
 
    Future<void> backgroundPullAll() async {
     if (!AppConfig.isSyncEnabled) return;
-    if (_isSyncing) return;                  // ← respect the mutex
+     if (_isSyncing) {
+      Future.delayed(const Duration(seconds: 2), pushNow);
+      return;
+    }                 // ← respect the mutex
     final reachable = await _isReachableCached();
     if (!reachable) return;
     _isSyncing = true;
     try {
-      await _pullMasterDataFresh();
+      await _pullMasterData();
       await _pullMovements();
       _updateLastSyncAt();
       debugPrint('SyncService.backgroundPullAll: done');
@@ -424,11 +443,12 @@ Future<void> _loadLastSyncAt() async {
   }
 
   Future<void> _pushMasterData() async {
-    if (!_masterDataDirty) return;
+     if (!_masterDataDirty) return;
     final now = DateTime.now();
-    // Throttle: max once per 60s even if dirty repeatedly
+    // Throttle: max once per 5s — prevents rapid duplicate pushes
+    // but short enough to not delay deletes/edits
     if (_lastMasterPush != null &&
-        now.difference(_lastMasterPush!).inSeconds < 60) return;
+        now.difference(_lastMasterPush!).inSeconds < 5) return;
 
     try {
       _lastMasterPush  = now;
@@ -458,9 +478,7 @@ Future<void> _loadLastSyncAt() async {
     try {
       final db    = DatabaseHelper.instance;
       // 5-min overlap catches any edge cases at boundary
-      final since = _lastSyncAt != null
-          ? _lastSyncAt!.subtract(const Duration(minutes: 5))
-          : DateTime.now().subtract(const Duration(days: 30));
+      final since = _effectiveSince();
 
       final result = await SupabaseService.instance.pullMovementsSince(since);
       if (!result.isSuccess) return 0;
@@ -495,9 +513,7 @@ Future<void> _loadLastSyncAt() async {
 
   Future<void> _pullMasterData() async {
     try {
-      final since = _lastSyncAt != null
-          ? _lastSyncAt!.subtract(const Duration(minutes: 5))
-          : DateTime.now().subtract(const Duration(days: 30));
+      final since = _effectiveSince();
 
       final result = await SupabaseService.instance.pullMasterDataSince(since);
       if (!result.isSuccess) return;

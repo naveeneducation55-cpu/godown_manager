@@ -15,6 +15,7 @@ import 'package:flutter/foundation.dart';
 import '../database/database_helper.dart';
 import '../services/sync_service.dart';
 import '../utils/id_generator.dart';
+import '../services/supabase_service.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MODELS
@@ -770,8 +771,15 @@ class AppDataProvider extends ChangeNotifier {
       await DatabaseHelper.instance.deleteStaff(id);
       _staff.removeWhere((s) => s.id == id);
       if (_currentStaff?.id == id) _currentStaff = null;
+      _notify(); // update UI immediately — local delete is done
+
+      // Hard delete from Supabase — retry on failure
+      final result = await SupabaseService.instance.deleteStaff(id);
+      if (!result.isSuccess) {
+        debugPrint('deleteStaff: Supabase delete failed — will retry via markMasterDirty');
+      }
+      // markMasterDirty pushes remaining staff — Supabase delete already removed the row
       SyncService.instance.markMasterDirty();
-      _notify();
     } catch (e) { debugPrint('deleteStaff($id): $e'); }
   }
 

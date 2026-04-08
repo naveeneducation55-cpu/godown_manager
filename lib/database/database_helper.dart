@@ -471,7 +471,7 @@ class DatabaseHelper {
     }, where: 'movement_id = ?', whereArgs: [id]);
   }
 
-  Future<bool> upsertMovementFromRemote(Map<String, dynamic> remote) async {
+Future<bool> upsertMovementFromRemote(Map<String, dynamic> remote) async {
     final d = await db;
     final remoteId = remote['movement_id'].toString();
     final remoteTs = remote['updated_at']?.toString() ?? '';
@@ -499,6 +499,7 @@ class DatabaseHelper {
     } else {
       final localTs         = existing.first['updated_at'] as String;
       final localSyncStatus = existing.first['sync_status'] as String;
+
       if (remoteTs.compareTo(localTs) > 0) {
         // Remote is newer — accept, mark synced
         await d.update(tMovements, {
@@ -514,14 +515,31 @@ class DatabaseHelper {
         }, where: 'movement_id = ?', whereArgs: [remoteId]);
         return true;
       }
-      // Local is newer — keep local, preserve pending so it gets pushed to Supabase
+
+      // Timestamps equal — remote edit may have same precision as local
+      // Accept remote if local is already synced (not a pending local change)
+      if (remoteTs == localTs && localSyncStatus == 'synced') {
+        await d.update(tMovements, {
+          'quantity':      remote['quantity'],
+          'from_location': remote['from_location']?.toString(),
+          'to_location':   remote['to_location']?.toString(),
+          'edited':        remote['edited'] == true ? 1 : 0,
+          'edited_by':     remote['edited_by']?.toString(),
+          'updated_at':    remoteTs,
+          'sync_status':   'synced',
+          'remark':        remote['remark'],
+          'is_deleted':    (remote['is_deleted'] == true || remote['is_deleted'] == 1) ? 1 : 0,
+        }, where: 'movement_id = ?', whereArgs: [remoteId]);
+        return true;
+      }
+
+      // Local is newer (pending) — keep local, it will push to Supabase
       if (localSyncStatus == 'pending') {
         debugPrint('DatabaseHelper: local newer than remote — keeping pending for push');
       }
       return false;
     }
   }
-
   // ═══════════════════════════════════════════════════════════════════════════
   // STOCK CALCULATION
   // ═══════════════════════════════════════════════════════════════════════════
