@@ -86,19 +86,21 @@ class SupabaseService {
 
    RealtimeChannel? _channel;
   void Function()? _onResubscribe;
+  void Function()? _onPullMissed;
   bool _isReconnecting = false;
   bool _isSubscribed = false;
   Timer? _heartbeatTimer;
 
-  void subscribeToAll({
+   void subscribeToAll({
     required void Function(Map<String, dynamic> row) onMovementInsert,
     required void Function(Map<String, dynamic> row) onMovementUpdate,
     required void Function() onMasterDataChanged,
     void Function()? onResubscribe,
+    void Function()? onPullMissed,
   }) {
     if (!AppConfig.isSyncEnabled) return;
-
     _onResubscribe = onResubscribe;
+    _onPullMissed  = onPullMissed;
     _channel?.unsubscribe();
 
     final channelName = 'changes_${DateTime.now().millisecondsSinceEpoch}';
@@ -124,6 +126,7 @@ class SupabaseService {
             onMovementUpdate(Map<String, dynamic>.from(payload.newRecord));
           },
         )
+
         // Master data — any change
         .onPostgresChanges(
           event:  PostgresChangeEvent.all,
@@ -167,6 +170,8 @@ class SupabaseService {
             Future.delayed(const Duration(seconds: 5), () {
               _isReconnecting = false;
               _onResubscribe?.call();
+              // Pull missed events after reconnect — catches gap during disconnect
+              _onPullMissed?.call();
             });
           } else if (status == RealtimeSubscribeStatus.closed) {
             _isSubscribed = false;
@@ -382,12 +387,26 @@ bool get isChannelHealthy => _isSubscribed && _channel != null;  // ← here
   Future<SyncResult<int>> pushItems(List<Map<String,dynamic>> items) async {
     if (items.isEmpty) return const SyncResult.ok(0);
     try {
-      await _client
-          .from('items')
-          .upsert(items, onConflict: 'item_id', ignoreDuplicates: false)
-          .timeout(const Duration(seconds: 8));
+      final deleted = items.where((i) => i['is_deleted'] == 1 || i['is_deleted'] == true).toList();
+      final active  = items.where((i) => i['is_deleted'] != 1 && i['is_deleted'] != true).toList();
+
+      if (active.isNotEmpty) {
+        await _client
+            .from('items')
+            .upsert(active, onConflict: 'item_id', ignoreDuplicates: false)
+            .timeout(const Duration(seconds: 8));
+      }
+      for (final item in deleted) {
+        await _client
+            .from('items')
+            .update({'is_deleted': true, 'updated_at': item['updated_at']})
+            .eq('item_id', item['item_id'])
+            .timeout(const Duration(seconds: 8));
+        debugPrint('pushItems: soft-deleted ${item['item_id']} on Supabase ✓');
+      }
       return SyncResult.ok(items.length);
     } catch (e) {
+      debugPrint('pushItems error: $e');
       return SyncResult.err('pushItems: $e');
     }
   }
@@ -396,12 +415,26 @@ bool get isChannelHealthy => _isSubscribed && _channel != null;  // ← here
       List<Map<String,dynamic>> locations) async {
     if (locations.isEmpty) return const SyncResult.ok(0);
     try {
-      await _client
-          .from('locations')
-          .upsert(locations, onConflict: 'location_id', ignoreDuplicates: false)
-          .timeout(const Duration(seconds: 8));
+      final deleted = locations.where((l) => l['is_deleted'] == 1 || l['is_deleted'] == true).toList();
+      final active  = locations.where((l) => l['is_deleted'] != 1 && l['is_deleted'] != true).toList();
+
+      if (active.isNotEmpty) {
+        await _client
+            .from('locations')
+            .upsert(active, onConflict: 'location_id', ignoreDuplicates: false)
+            .timeout(const Duration(seconds: 8));
+      }
+      for (final loc in deleted) {
+        await _client
+            .from('locations')
+            .update({'is_deleted': true, 'updated_at': loc['updated_at']})
+            .eq('location_id', loc['location_id'])
+            .timeout(const Duration(seconds: 8));
+        debugPrint('pushLocations: soft-deleted ${loc['location_id']} on Supabase ✓');
+      }
       return SyncResult.ok(locations.length);
     } catch (e) {
+      debugPrint('pushLocations error: $e');
       return SyncResult.err('pushLocations: $e');
     }
   }

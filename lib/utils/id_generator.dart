@@ -128,7 +128,7 @@ class IdGenerator {
     try {
       final token  = await _getDeviceToken();
       final seq    = await _nextSeq(prefix);
-      final now    = DateTime.now();
+      final now    = DateTime.now().toUtc();
       final date   = '${now.year}'
           '${now.month.toString().padLeft(2, '0')}'
           '${now.day.toString().padLeft(2, '0')}';

@@ -259,7 +259,7 @@ class _DateCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t   = context.appTheme;
-    final now = DateTime.now();
+    final now = DateTime.now().toUtc();
 
     const weekdays = const ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
     const months   = const ['Jan','Feb','Mar','Apr','May','Jun',

@@ -219,7 +219,7 @@ class DatabaseHelper {
       (item: 7, from: 0, to: 3, staff: 1, qty: 35.0, hrs: 50, remark: ''),
     ];
 
-    final base = DateTime.now();
+    final base = DateTime.now().toUtc();
     for (final m in seedMvts) {
       final id = await idGen.movement();
       final ts = base.subtract(Duration(hours: m.hrs)).toIso8601String();
@@ -471,6 +471,46 @@ class DatabaseHelper {
     }, where: 'movement_id = ?', whereArgs: [id]);
   }
 
+
+Future<void> batchUpsertMasterFromRemote({
+  required List<Map<String,dynamic>> items,
+  required List<Map<String,dynamic>> locations,
+  required List<Map<String,dynamic>> staff,
+}) async {
+  final d = await db;
+  await d.transaction((txn) async {
+    for (final row in items) {
+      await txn.insert(tItems, {
+        'item_id':    row['item_id']?.toString(),
+        'item_name':  row['item_name']?.toString(),
+        'unit':       row['unit']?.toString(),
+        'created_at': row['created_at']?.toString(),
+        'updated_at': row['updated_at']?.toString(),
+        'is_deleted': (row['is_deleted'] == true || row['is_deleted'] == 1) ? 1 : 0,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    for (final row in locations) {
+      await txn.insert(tLocations, {
+        'location_id':   row['location_id']?.toString(),
+        'location_name': row['location_name']?.toString(),
+        'type':          row['type']?.toString(),
+        'created_at':    row['created_at']?.toString(),
+        'updated_at':    row['updated_at']?.toString(),
+        'is_deleted':    (row['is_deleted'] == true || row['is_deleted'] == 1) ? 1 : 0,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    for (final row in staff) {
+      await txn.insert(tStaff, {
+        'staff_id':   row['staff_id']?.toString(),
+        'staff_name': row['staff_name']?.toString(),
+        'pin':        row['pin']?.toString(),
+        'role':       row['role']?.toString() ?? 'staff',
+        'created_at': row['created_at']?.toString(),
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+  });
+}
+
 Future<bool> upsertMovementFromRemote(Map<String, dynamic> remote) async {
     final d = await db;
     final remoteId = remote['movement_id'].toString();
@@ -499,6 +539,18 @@ Future<bool> upsertMovementFromRemote(Map<String, dynamic> remote) async {
     } else {
       final localTs         = existing.first['updated_at'] as String;
       final localSyncStatus = existing.first['sync_status'] as String;
+
+      // Deletion is always authoritative — accept regardless of timestamp
+      final remoteIsDeleted = remote['is_deleted'] == true || remote['is_deleted'] == 1;
+      if (remoteIsDeleted) {
+        await d.update(tMovements, {
+          'is_deleted':  1,
+          'edited_by':   remote['edited_by']?.toString(),
+          'updated_at':  remoteTs,
+          'sync_status': 'synced',
+        }, where: 'movement_id = ?', whereArgs: [remoteId]);
+        return true;
+      }
 
       if (remoteTs.compareTo(localTs) > 0) {
         // Remote is newer — accept, mark synced

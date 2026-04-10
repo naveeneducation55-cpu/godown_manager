@@ -193,7 +193,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
       _selectedTo   != null;
 
   String _timeNow() {
-    final n    = DateTime.now();
+    final n    = DateTime.now().toUtc();
     final h    = n.hour % 12 == 0 ? 12 : n.hour % 12;
     final min  = n.minute.toString().padLeft(2, '0');
     final ampm = n.hour >= 12 ? 'PM' : 'AM';

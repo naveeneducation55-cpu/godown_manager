@@ -70,7 +70,7 @@ class SyncService {
   static const _reachableCacheTtl = Duration(seconds: 30);
 
   Future<bool> _isReachableCached() async {
-    final now = DateTime.now();
+    final now = DateTime.now().toUtc();
     if (_reachableCache != null &&
         _reachableCacheTime != null &&
         now.difference(_reachableCacheTime!) < _reachableCacheTtl) {
@@ -88,11 +88,14 @@ class SyncService {
   }
 
  DateTime _effectiveSince() {
-    final now        = DateTime.now();
+    final now        = DateTime.now().toUtc();
     final startOfDay = DateTime(now.year, now.month, now.day);
-    if (_lastSyncAt == null) return startOfDay;
+    if (_lastSyncAt == null) {
+      return now.subtract(const Duration(days: 30));
+    }
     final fromLastSync = _lastSyncAt!.subtract(const Duration(minutes: 5));
-    return fromLastSync.isAfter(startOfDay) ? fromLastSync : startOfDay;
+    // Return EARLIER of the two — more coverage, never miss anything
+    return fromLastSync.isBefore(startOfDay) ? fromLastSync : startOfDay;
   }
 
   // ── Master data dirty flag ─────────────────────────────────────────────────
@@ -127,7 +130,8 @@ class SyncService {
       onMovementInsert:    _handleRemoteMovement,
       onMovementUpdate:    _handleRemoteMovement,
       onMasterDataChanged: _handleMasterDataChanged,
-      onResubscribe:       reconnectRealtime,   // ← wire the auto-reconnect
+      onResubscribe:       reconnectRealtime,
+      onPullMissed:        _pullOnly,
     );
 
     // Fallback pull-only — catches missed realtime events
@@ -178,7 +182,7 @@ Future<void> _loadLastSyncAt() async {
   }
 
   void _updateLastSyncAt() {
-    _lastSyncAt = DateTime.now();
+    _lastSyncAt = DateTime.now().toUtc();
     DatabaseHelper.instance.saveLastSyncAt(_lastSyncAt!);
   }
   
@@ -263,10 +267,7 @@ Future<void> _loadLastSyncAt() async {
 
   Future<void> _pullOnly() async {
     if (!AppConfig.isSyncEnabled) return;
-     if (_isSyncing) {
-      Future.delayed(const Duration(seconds: 2), pushNow);
-      return;
-    }
+      if (_isSyncing) return;
 
     final reachable = await _isReachableCached();
     if (!reachable) return;
@@ -292,10 +293,7 @@ Future<void> _loadLastSyncAt() async {
 
    Future<void> backgroundPullAll() async {
     if (!AppConfig.isSyncEnabled) return;
-     if (_isSyncing) {
-      Future.delayed(const Duration(seconds: 2), pushNow);
-      return;
-    }                 // ← respect the mutex
+      if (_isSyncing) return;             // ← respect the mutex
     final reachable = await _isReachableCached();
     if (!reachable) return;
     _isSyncing = true;
@@ -383,7 +381,7 @@ Future<void> _loadLastSyncAt() async {
   Timer? _masterDataDebounce;
   void _handleMasterDataChanged() {
     _masterDataDebounce?.cancel();
-    _masterDataDebounce = Timer(const Duration(milliseconds: 500), () {
+    _masterDataDebounce = Timer(const Duration(milliseconds: 1500), () {
       // Pass null = pull last 24h regardless of _lastSyncAt
       // Ensures we never miss a record due to stale timestamp
       _pullMasterDataFresh().then((_) => _onMasterDataChanged?.call());
@@ -393,23 +391,29 @@ Future<void> _loadLastSyncAt() async {
   // Pull master data ignoring _lastSyncAt — used on realtime events
   Future<void> _pullMasterDataFresh() async {
     try {
-      final since = DateTime.now().subtract(const Duration(hours: 24));
+      final since  = _effectiveSince();
       final result = await SupabaseService.instance.pullMasterDataSince(since);
       if (!result.isSuccess) return;
 
       final data = result.data!;
       final db   = DatabaseHelper.instance;
 
-      for (final row in data['items']     ?? []) { await db.upsertItemFromRemote(row); }
-      for (final row in data['locations'] ?? []) { await db.upsertLocationFromRemote(row); }
-      for (final row in data['staff']     ?? []) { await db.upsertStaffFromRemote(row); }
-
+      // Process SQLite writes in background — avoid blocking main thread
+      // Single transaction — faster, atomic, no main thread blocking
+      await db.batchUpsertMasterFromRemote(
+        items:     List<Map<String,dynamic>>.from(data['items']     ?? []),
+        locations: List<Map<String,dynamic>>.from(data['locations'] ?? []),
+        staff:     List<Map<String,dynamic>>.from(data['staff']     ?? []),
+      );
       final total = (data['items']?.length     ?? 0) +
                     (data['locations']?.length ?? 0) +
                     (data['staff']?.length     ?? 0);
 
-      if (total > 0) debugPrint('SyncService: realtime master pull — $total records');
-    } catch (e) {
+      if (total > 0) {debugPrint('SyncService: realtime master pull — '
+          'items:${data['items']?.length ?? 0} '
+          'locations:${data['locations']?.length ?? 0} '
+          'staff:${data['staff']?.length ?? 0}');
+    }} catch (e) {
       debugPrint('SyncService._pullMasterDataFresh error: $e');
     }
   }
@@ -444,11 +448,15 @@ Future<void> _loadLastSyncAt() async {
 
   Future<void> _pushMasterData() async {
      if (!_masterDataDirty) return;
-    final now = DateTime.now();
+    final now = DateTime.now().toUtc();
     // Throttle: max once per 5s — prevents rapid duplicate pushes
     // but short enough to not delay deletes/edits
-    if (_lastMasterPush != null &&
-        now.difference(_lastMasterPush!).inSeconds < 5) return;
+   if (_lastMasterPush != null &&
+        now.difference(_lastMasterPush!).inSeconds < 5) {
+      // Throttled — retry after delay so delete is not silently lost
+      Future.delayed(const Duration(seconds: 6), _pushMasterDataNow);
+      return;
+    }
 
     try {
       _lastMasterPush  = now;
@@ -463,7 +471,10 @@ Future<void> _loadLastSyncAt() async {
       await SupabaseService.instance.pushLocations(_serialiseMaster(results[1]));
       await SupabaseService.instance.pushStaff(_serialiseMaster(results[2]));
 
-      debugPrint('SyncService: master data pushed');
+      debugPrint('SyncService: master data pushed — '
+          'items:${results[0].length} '
+          'locations:${results[1].length} '
+          'staff:${results[2].length}');
     } catch (e) {
       _masterDataDirty = true; // retry next time
       debugPrint('SyncService._pushMasterData error: $e');
@@ -511,19 +522,32 @@ Future<void> _loadLastSyncAt() async {
     }
   }
 
-  Future<void> _pullMasterData() async {
+    Future<void> _pullMasterData() async {
     try {
-      final since = _effectiveSince();
-
+      final since  = _effectiveSince();
       final result = await SupabaseService.instance.pullMasterDataSince(since);
       if (!result.isSuccess) return;
 
       final data = result.data!;
       final db   = DatabaseHelper.instance;
 
-      for (final row in data['items']     ?? []) { await db.upsertItemFromRemote(row); }
-      for (final row in data['locations'] ?? []) { await db.upsertLocationFromRemote(row); }
-      for (final row in data['staff']     ?? []) { await db.upsertStaffFromRemote(row); }
+      await Future.wait([
+        Future(() async {
+          for (final row in data['items'] ?? []) {
+            await db.upsertItemFromRemote(row);
+          }
+        }),
+        Future(() async {
+          for (final row in data['locations'] ?? []) {
+            await db.upsertLocationFromRemote(row);
+          }
+        }),
+        Future(() async {
+          for (final row in data['staff'] ?? []) {
+            await db.upsertStaffFromRemote(row);
+          }
+        }),
+      ]);
 
       final total = (data['items']?.length     ?? 0) +
                     (data['locations']?.length ?? 0) +
@@ -534,6 +558,7 @@ Future<void> _loadLastSyncAt() async {
       debugPrint('SyncService._pullMasterData error: $e');
     }
   }
+
 
   // ═══════════════════════════════════════════════════════════════════════════
   // FIRST SYNC — fresh install only

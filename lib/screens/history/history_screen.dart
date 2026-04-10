@@ -30,8 +30,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
     return data.sortedMovements.where((m) {
       // Date filter
       if (_dateFilter == _DateFilter.today) {
-        final d = DateTime(
-            m.createdAt.year, m.createdAt.month, m.createdAt.day);
+        final local = m.createdAt.toLocal();
+        final d = DateTime(local.year, local.month, local.day);
         if (d != today) return false;
       }
       if (_dateFilter == _DateFilter.week &&
@@ -66,8 +66,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final map       = <String, List<MovementModel>>{};
 
     for (final m in list) {
-      final d = DateTime(
-          m.createdAt.year, m.createdAt.month, m.createdAt.day);
+      final local = m.createdAt.toLocal();
+      final d = DateTime(local.year, local.month, local.day);
       final label = d == today
           ? 'Today'
           : d == yesterday
@@ -255,8 +255,40 @@ class _LogRow extends StatefulWidget {
 
 class _LogRowState extends State<_LogRow> {
 
-  Future<void> _confirmDelete(BuildContext context) async {
-    final t = context.appTheme;
+    Future<void> _confirmDelete(BuildContext context) async {
+    final t     = context.appTheme;
+     final today = DateTime.now();
+    final m     = widget.movement;
+    final sameDay = m.createdAt.year  == today.year  &&
+                    m.createdAt.month == today.month &&
+                    m.createdAt.day   == today.day;
+
+    // Block edit/delete of movements not from today
+    if (!sameDay) {
+      await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: t.surface,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppSpacing.radius)),
+          title: Text('Cannot Delete',
+              style: AppFonts.heading(color: t.text)),
+          content: Text(
+            'Movements can only be deleted on the same day they were created.\n\n'
+            'This movement was created on '
+            '${m.createdAt.day}/${m.createdAt.month}/${m.createdAt.year}.',
+            style: AppFonts.body(color: t.text2),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: Text('OK', style: AppFonts.body(color: t.primary)),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
 
     // Block delete of SUPPLIER movements
     if (widget.movement.fromLocationId == 'SUPPLIER') {
@@ -290,7 +322,6 @@ class _LogRowState extends State<_LogRow> {
     // effectively adds that qty back — safe.
     // Deleting a movement that brought stock TO a location
     // removes that qty — could make dependent locations go negative.
-    final m     = widget.movement;
     final stock = widget.data.getStock();
 
     // Check if destination location has enough stock to absorb this deletion
@@ -371,6 +402,31 @@ class _LogRowState extends State<_LogRow> {
     if (!ok) showError(context, 'Failed to delete. Try again.');
   }
 
+  void _showCannotEditDialog(BuildContext context, bool sameDay) {
+  final t = context.appTheme;
+  final message = !sameDay
+      ? 'Movements can only be edited on the same day they were created.'
+      : 'This movement has already been corrected once.\n\n'
+        'Contact admin if a further change is needed.';
+  showDialog(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: t.surface,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppSpacing.radius)),
+      title: Text('Cannot Edit',
+          style: AppFonts.heading(color: t.text)),
+      content: Text(message, style: AppFonts.body(color: t.text2)),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(),
+          child: Text('OK', style: AppFonts.body(color: t.primary)),
+        ),
+      ],
+    ),
+  );
+}
+
   @override
   Widget build(BuildContext context) {
     final t       = context.appTheme;
@@ -406,13 +462,23 @@ class _LogRowState extends State<_LogRow> {
     // Regular movements: allow edit only if not from supplier
     
     final isSupplierMovement = m.fromLocationId == 'SUPPLIER';
+    final today      = DateTime.now();
+    final sameDay    = m.createdAt.year  == today.year  &&
+                       m.createdAt.month == today.month &&
+                       m.createdAt.day   == today.day;
+    // Can only edit/delete movements created today
+    final canEdit    = sameDay && (isAdmin || !m.edited);
+    final canDelete  = sameDay && isAdmin;
 
     // ── Row content ──────────────────────────────────────────────────────────
     final rowContent = GestureDetector(
-      onTap: () => _showEditSheet(
-          context, m, widget.data,
-          supplierOnly: isSupplierMovement,
-      ),
+      onTap: canEdit
+          ? () => _showEditSheet(
+                context, m, widget.data,
+                supplierOnly: isSupplierMovement,
+              )
+          : () => _showCannotEditDialog(context, sameDay),
+
       child: Container(
         decoration: widget.isLast
             ? null
@@ -490,8 +556,7 @@ class _LogRowState extends State<_LogRow> {
     );
 
     // ── Wrap with Dismissible for admin only ─────────────────────────────────
-    if (!isAdmin) return rowContent;
-
+    if (!isAdmin || !canDelete) return rowContent;
     return Dismissible(
       key:       ValueKey(m.id),
       direction: DismissDirection.endToStart,

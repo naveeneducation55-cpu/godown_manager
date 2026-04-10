@@ -138,7 +138,7 @@ class _ItemsScreenState extends State<ItemsScreen> {
         setState(() {
           item.name      = name;
           item.unit      = unit;
-          item.updatedAt = DateTime.now();
+          item.updatedAt = DateTime.now().toUtc();
         });
         showSuccess(context, '$name updated');
       },
@@ -151,7 +151,7 @@ class _ItemsScreenState extends State<ItemsScreen> {
     if (!confirmed) return;
     setState(() {
       item.isDeleted = true;
-      item.updatedAt = DateTime.now();
+      item.updatedAt = DateTime.now().toUtc();
     });
     if (!mounted) return;
     showSuccess(context, '${item.name} deleted');

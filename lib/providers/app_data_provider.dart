@@ -336,15 +336,25 @@ class AppDataProvider extends ChangeNotifier {
     _refreshStockCache();
   }
 
-  Future<void> _reloadMasterData() async {
+   Future<void> _reloadMasterData() async {
     try {
-      final db      = DatabaseHelper.instance;
+      final db = DatabaseHelper.instance;
+
+      // Run all three reads in parallel — faster, non-blocking
       final results = await Future.wait([
-        db.getItems(), db.getLocations(), db.getStaff(),
+        db.getItems(),
+        db.getLocations(),
+        db.getStaff(),
       ]);
-      _items    ..clear()..addAll(_safeParseItems(results[0]));
-      _locations..clear()..addAll(_safeParseLocations(results[1]));
-      _staff    ..clear()..addAll(_safeParseStaff(results[2]));
+
+      // Parse in background isolate — heavy for large datasets
+      final items     = await compute(_parseItems,     results[0]);
+      final locations = await compute(_parseLocations, results[1]);
+      final staff     = await compute(_parseStaff,     results[2]);
+
+      _items    ..clear()..addAll(items);
+      _locations..clear()..addAll(locations);
+      _staff    ..clear()..addAll(staff);
       _invalidateCaches();
       _notifyNow();
       _refreshStockCache();
@@ -353,7 +363,6 @@ class AppDataProvider extends ChangeNotifier {
       debugPrint('AppDataProvider._reloadMasterData error: $e');
     }
   }
-
   // ═══════════════════════════════════════════════════════════════════════════
   // _loadAll
   // ═══════════════════════════════════════════════════════════════════════════
@@ -522,7 +531,11 @@ class AppDataProvider extends ChangeNotifier {
 
   List<StockBalance> getStock() {
     if (!_stockDirty && _stockCache != null) return _stockCache!;
-    _stockCache = _calcStock(_StockInput(items, locations, _movements));
+    _stockCache = _calcStock(_StockInput(
+        items,
+        locations,
+        _movements.where((m) => !m.isDeleted).toList(),
+    ));
     _stockDirty = false;
     return _stockCache!;
   }
@@ -531,7 +544,8 @@ class AppDataProvider extends ChangeNotifier {
     try {
       final result = await compute(
         _calcStock,
-        _StockInput(items, locations, List.from(_movements)),
+        _StockInput(items, locations,
+            _movements.where((m) => !m.isDeleted).toList()),
       );
       if (_disposed) return;
       _stockCache = result;
@@ -579,7 +593,7 @@ class AppDataProvider extends ChangeNotifier {
     double? openingQty,
   }) async {
     try {
-      final now    = DateTime.now();
+      final now    = DateTime.now().toUtc();
       final db     = DatabaseHelper.instance;
       final itemId = await IdGenerator.instance.item();
       await db.insertItem({
@@ -634,7 +648,7 @@ class AppDataProvider extends ChangeNotifier {
     required String unit,
   }) async {
     try {
-      final now = DateTime.now();
+      final now = DateTime.now().toUtc();
       await DatabaseHelper.instance.updateItem(id, {
         'item_name':  name,
         'unit':       unit,
@@ -649,7 +663,7 @@ class AppDataProvider extends ChangeNotifier {
 
   Future<void> deleteItem(String id) async {
     try {
-      final now = DateTime.now();
+      final now = DateTime.now().toUtc();
       await DatabaseHelper.instance.softDeleteItem(id);
       final item = _items.firstWhere((i) => i.id == id);
       item.isDeleted = true; item.updatedAt = now;
@@ -669,7 +683,7 @@ class AppDataProvider extends ChangeNotifier {
 
   Future<void> addLocation({required String name, required String type}) async {
     try {
-      final now   = DateTime.now();
+      final now   = DateTime.now().toUtc();
       final locId = await IdGenerator.instance.location();
       await DatabaseHelper.instance.insertLocation({
         'location_id':   locId,
@@ -691,7 +705,7 @@ class AppDataProvider extends ChangeNotifier {
     required String type,
   }) async {
     try {
-      final now = DateTime.now();
+      final now = DateTime.now().toUtc();
       await DatabaseHelper.instance.updateLocation(id, {
         'location_name': name,
         'type':          type,
@@ -706,7 +720,7 @@ class AppDataProvider extends ChangeNotifier {
 
   Future<void> deleteLocation(String id) async {
     try {
-      final now = DateTime.now();
+      final now = DateTime.now().toUtc();
       await DatabaseHelper.instance.softDeleteLocation(id);
       final loc = _locations.firstWhere((l) => l.id == id);
       loc.isDeleted = true; loc.updatedAt = now;
@@ -730,7 +744,7 @@ class AppDataProvider extends ChangeNotifier {
     String          role = 'staff',
   }) async {
     try {
-      final now     = DateTime.now();
+      final now     = DateTime.now().toUtc();
       final staffId = await IdGenerator.instance.staff();
       await DatabaseHelper.instance.insertStaff({
         'staff_id':   staffId,
@@ -811,7 +825,7 @@ class AppDataProvider extends ChangeNotifier {
     }
   }
   try {
-    final now   = DateTime.now();
+    final now   = DateTime.now().toUtc();
     final mvtId = await IdGenerator.instance.movement();
     await DatabaseHelper.instance.insertMovement({
       'movement_id':   mvtId,
@@ -856,7 +870,7 @@ class AppDataProvider extends ChangeNotifier {
     if (quantity <= 0)                  { debugPrint('editMovement: qty <= 0');    return false; }
     if (fromLocationId == toLocationId) { debugPrint('editMovement: from == to'); return false; }
     try {
-      final now     = DateTime.now();
+      final now     = DateTime.now().toUtc();
       final staffId = _currentStaff?.id;
       await DatabaseHelper.instance.updateMovement(movementId, {
         'quantity':      quantity,
@@ -913,16 +927,25 @@ class AppDataProvider extends ChangeNotifier {
 
   Future<void> mergeRemoteMovement(Map<String,dynamic> row) async {
     try {
-      final m   = MovementModel.fromMap(_normaliseRemoteRow(row));
+      // Parse off main thread
+      final normalised = _normaliseRemoteRow(row);
+      final m          = await compute(
+        (r) => MovementModel.fromMap(r),
+        normalised,
+      );
       final idx = _movements.indexWhere((e) => e.id == m.id);
       if (idx >= 0) {
         _movements[idx] = m;
       } else if (!m.isDeleted) {
-        // Only insert if not deleted — no point adding a deleted movement
         _movements.insert(0, m);
       }
       _invalidateCaches();
-      _notify();
+      // Use notifyNow for deletions — ensures UI removes row immediately
+      if (m.isDeleted) {
+        _notifyNow();
+      } else {
+        _notify();
+      }
       _refreshStockCache();
       debugPrint('AppDataProvider: remote movement merged — ${m.id}');
     } catch (e) {
