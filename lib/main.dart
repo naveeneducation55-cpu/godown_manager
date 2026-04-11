@@ -111,14 +111,13 @@ class _GodownAppState extends State<GodownApp> with WidgetsBindingObserver {
       darkTheme:                 darkTheme,
       home: Consumer<AppDataProvider>(
         builder: (context, data, _) {
-          if (data.isLoading || (!data.syncFailed && data.staff.isEmpty)) {
+          if (data.isLoading) {
             return _SyncLoadingScreen(
               message: data.retryMessage,
               attempt: data.retryAttempt,
               max:     data.maxRetries,
             );
-          }
-          if (data.syncFailed) {
+          }          if (data.syncFailed) {
             return _SyncErrorScreen(
               onRetry: () async {
                 await data.retryInitialize();

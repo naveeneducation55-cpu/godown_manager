@@ -91,11 +91,11 @@ class SyncService {
     final now        = DateTime.now().toUtc();
     final startOfDay = DateTime(now.year, now.month, now.day);
     if (_lastSyncAt == null) {
-      return now.subtract(const Duration(days: 30));
+      return DateTime.now().subtract(const Duration(hours: 24));
     }
-    final fromLastSync = _lastSyncAt!.subtract(const Duration(minutes: 5));
+    final fromLastSync = _lastSyncAt!.subtract(const Duration(minutes: 10));
     // Return EARLIER of the two — more coverage, never miss anything
-    return fromLastSync.isBefore(startOfDay) ? fromLastSync : startOfDay;
+    return fromLastSync.isBefore(startOfDay) ? fromLastSync : fromLastSync;
   }
 
   // ── Master data dirty flag ─────────────────────────────────────────────────
@@ -281,9 +281,9 @@ Future<void> _loadLastSyncAt() async {
       await _pullMasterData();
       await _pullMovements();
       _updateLastSyncAt();
-
+      // Notify UI to reload master data from SQLite after pull
+      _onMasterDataChanged?.call();
       debugPrint('SyncService: fallback pull done $time');
-
     } catch (e) {
       debugPrint('SyncService._pullOnly error: $e');
     } finally {
@@ -301,7 +301,9 @@ Future<void> _loadLastSyncAt() async {
       await _pullMasterData();
       await _pullMovements();
       _updateLastSyncAt();
+      _onMasterDataChanged?.call();
       debugPrint('SyncService.backgroundPullAll: done');
+
     } catch (e) {
       debugPrint('SyncService.backgroundPullAll error: $e');
     } finally {
@@ -505,6 +507,7 @@ Future<void> _loadLastSyncAt() async {
             _onRemoteMovement?.call(row);
             merged++;
           }
+          // No log for unchanged — reduces noise significantly
         } catch (e) {
           debugPrint('SyncService: merge skip — $e');
         }
@@ -622,6 +625,7 @@ Future<void> _loadLastSyncAt() async {
         'edited_by':     m['edited_by'],
         'sync_status':   'synced',
         'remark':        m['remark'],
+        'bale_no':       m['bale_no'],
         'is_deleted':    m['is_deleted'] == 1,
       }).toList();
 

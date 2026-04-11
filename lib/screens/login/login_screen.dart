@@ -91,135 +91,149 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
       ),
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: AppSizes.pagePadding(context),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
+        child: Column(
+          children: [
 
-              const SizedBox(height: AppSpacing.lg),
+            // ── Scrollable top — logo + staff list ────────────────────────
+            Expanded(
+              child: SingleChildScrollView(
+                padding: AppSizes.pagePadding(context),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const SizedBox(height: AppSpacing.lg),
 
-              // App logo
-              Center(
-                child: Container(
-                  width: 64, height: 64,
-                  decoration: BoxDecoration(
-                    color:        t.primary,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Center(
-                    child: Text(
-                      'GI',
-                      style: AppFonts.monoStyle(
-                        size:   24,
-                        color:  t.primaryFg,
-                        weight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: AppSpacing.sm),
-              Center(
-                child: Text(
-                  'Godown Inventory',
-                  style: AppFonts.heading(color: t.text),
-                ),
-              ),
-              const SizedBox(height: 4),
-              Center(
-                child: Text(
-                  'Select your name to get started',
-                  style: AppFonts.label(color: t.text3),
-                ),
-              ),
-
-              const SizedBox(height: AppSpacing.xl),
-
-              // ── Staff selection ──────────────────────────────────────────
-              const SectionLabel('Who are you?'),
-
-              ...data.staff.map((s) => Padding(
-                padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-                child: _StaffTile(
-                  staff:    s,
-                  selected: _selectedStaff?.id == s.id,
-                  onTap:    () => _onStaffTapped(s),
-                ),
-              )),
-
-              // ── PIN pad ──────────────────────────────────────────────────
-              if (_selectedStaff != null) ...[
-                const SizedBox(height: AppSpacing.xl),
-
-                // Dots
-                Center(
-                  child: Column(children: [
-                    Text(
-                      'Enter PIN for ${_selectedStaff!.name}',
-                      style: AppFonts.label(color: t.text2),
-                    ),
-                    const SizedBox(height: AppSpacing.md),
-                    Row(
-                      mainAxisSize:      MainAxisSize.min,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: List.generate(4, (i) {
-                        final filled = i < _pin.length;
-                        return Container(
-                          width:  14, height: 14,
-                          margin: const EdgeInsets.symmetric(horizontal: 8),
-                          decoration: BoxDecoration(
-                            color: filled
-                                ? (_pinError ? t.error : t.primary)
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(99),
-                            border: Border.all(
-                              color: filled
-                                  ? (_pinError ? t.error : t.primary)
-                                  : t.border,
-                              width: 1.5,
+                    // App logo
+                    Center(
+                      child: Container(
+                        width: 64, height: 64,
+                        decoration: BoxDecoration(
+                          color:        t.primary,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Center(
+                          child: Text(
+                            'GI',
+                            style: AppFonts.monoStyle(
+                              size:   24,
+                              color:  t.primaryFg,
+                              weight: FontWeight.w700,
                             ),
                           ),
-                        );
-                      }),
-                    ),
-                    const SizedBox(height: AppSpacing.sm),
-                    // Error text
-                    AnimatedOpacity(
-                      opacity:  _pinError ? 1.0 : 0.0,
-                      duration: const Duration(milliseconds: 200),
-                      child: Text(
-                        'Incorrect PIN. Try again.',
-                        style: AppFonts.label(color: t.error),
+                        ),
                       ),
                     ),
-                  ]),
+                    const SizedBox(height: AppSpacing.sm),
+                    Center(
+                      child: Text(
+                        'Godown Inventory',
+                        style: AppFonts.heading(color: t.text),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Center(
+                      child: Text(
+                        _selectedStaff == null
+                            ? 'Select your name to get started'
+                            : 'Enter PIN for ${_selectedStaff!.name}',
+                        style: AppFonts.label(color: t.text3),
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.xl),
+
+                    // Staff selection
+                    const SectionLabel('Who are you?'),
+                    ...data.staff.map((s) => Padding(
+                      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                      child: _StaffTile(
+                        staff:    s,
+                        selected: _selectedStaff?.id == s.id,
+                        onTap:    () => _onStaffTapped(s),
+                      ),
+                    )),
+                    const SizedBox(height: AppSpacing.xl),
+                  ],
                 ),
+              ),
+            ),
 
-                const SizedBox(height: AppSpacing.lg),
+            // ── Fixed bottom — PIN pad slides up when staff selected ───────
+            AnimatedSize(
+              duration: const Duration(milliseconds: 250),
+              curve:    Curves.easeInOut,
+              child: _selectedStaff == null
+                  ? const SizedBox.shrink()
+                  : Container(
+                      decoration: BoxDecoration(
+                        color: t.surface,
+                        border: Border(
+                          top: BorderSide(color: t.border, width: 0.8),
+                        ),
+                      ),
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
 
-                // PIN pad grid
-                GridView.count(
-                  crossAxisCount:   3,
-                  shrinkWrap:       true,
-                  physics:          const NeverScrollableScrollPhysics(),
-                  mainAxisSpacing:  AppSpacing.sm,
-                  crossAxisSpacing: AppSpacing.sm,
-                  childAspectRatio: 2.2,
-                  children: _keys.map((key) {
-                    if (key.isEmpty) return const SizedBox.shrink();
-                    return _PinKey(
-                      label:    key,
-                      isDelete: key == '⌫',
-                      onTap:    () => _onKeyTap(key),
-                    );
-                  }).toList(),
-                ),
-              ],
+                          // PIN dots
+                          Row(
+                            mainAxisSize:      MainAxisSize.min,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: List.generate(4, (i) {
+                              final filled = i < _pin.length;
+                              return Container(
+                                width:  14, height: 14,
+                                margin: const EdgeInsets.symmetric(horizontal: 8),
+                                decoration: BoxDecoration(
+                                  color: filled
+                                      ? (_pinError ? t.error : t.primary)
+                                      : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(99),
+                                  border: Border.all(
+                                    color: filled
+                                        ? (_pinError ? t.error : t.primary)
+                                        : t.border,
+                                    width: 1.5,
+                                  ),
+                                ),
+                              );
+                            }),
+                          ),
+                          const SizedBox(height: AppSpacing.xs),
 
-              const SizedBox(height: AppSpacing.xl),
-            ],
-          ),
+                          // Error text
+                          AnimatedOpacity(
+                            opacity:  _pinError ? 1.0 : 0.0,
+                            duration: const Duration(milliseconds: 200),
+                            child: Text(
+                              'Incorrect PIN. Try again.',
+                              style: AppFonts.label(color: t.error),
+                            ),
+                          ),
+                          const SizedBox(height: AppSpacing.md),
+
+                          // PIN pad grid
+                          GridView.count(
+                            crossAxisCount:   3,
+                            shrinkWrap:       true,
+                            physics:          const NeverScrollableScrollPhysics(),
+                            mainAxisSpacing:  AppSpacing.sm,
+                            crossAxisSpacing: AppSpacing.sm,
+                            childAspectRatio: 2.8,
+                            children: _keys.map((key) {
+                              if (key.isEmpty) return const SizedBox.shrink();
+                              return _PinKey(
+                                label:    key,
+                                isDelete: key == '⌫',
+                                onTap:    () => _onKeyTap(key),
+                              );
+                            }).toList(),
+                          ),
+                        ],
+                      ),
+                    ),
+            ),
+          ],
         ),
       ),
     );

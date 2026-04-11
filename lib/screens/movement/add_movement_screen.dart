@@ -23,6 +23,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
   // Controllers — all disposed in dispose()
   final _qtyCtrl    = TextEditingController();
   final _itemCtrl   = TextEditingController();
+  final _baleNoCtrl = TextEditingController();
   final _remarkCtrl = TextEditingController();
   final _formKey    = GlobalKey<FormState>();
   final _itemFocus  = FocusNode();
@@ -54,6 +55,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
     _itemFocus.removeListener(_onItemFocusChanged);
     _qtyCtrl.dispose();
     _itemCtrl.dispose();
+    _baleNoCtrl.dispose();
     _remarkCtrl.dispose();
     _itemFocus.dispose();
     super.dispose();
@@ -146,6 +148,9 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
         toLocationId:   _selectedTo!.id,
         quantity:       qty,
         staffId:        staffId,
+        baleNo: _baleNoCtrl.text.trim().isEmpty
+              ? null
+              : _baleNoCtrl.text.trim(),
         remark: _remarkCtrl.text.trim().isEmpty
             ? null
             : _remarkCtrl.text.trim(),
@@ -176,6 +181,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
   void _clearForm() {
     _clearItem();
     _qtyCtrl.clear();
+    _baleNoCtrl.clear();
     _remarkCtrl.clear();
     if (mounted) {
       setState(() {
@@ -377,6 +383,20 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
                     _buildPreview(t),
 
                   const SizedBox(height: AppSpacing.md),
+
+                  // Bale No / LR No — optional
+                  const SectionLabel('Bale No / LR No (optional)'),
+                  TextFormField(
+                    controller:  _baleNoCtrl,
+                    maxLines:    1,
+                    style:       AppFonts.body(color: t.text),
+                    decoration:  InputDecoration(
+                      hintText:   'e.g. 1247/1, LR-2024/456',
+                      prefixIcon: Icon(Icons.tag_rounded,
+                          size: 18, color: t.text3),
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
 
                   // Remark — optional
                   const SectionLabel('Remark (optional)'),
@@ -630,7 +650,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
         available.any((l) => l.id == value?.id) ? value : null;
 
     return DropdownButtonFormField<LocationModel>(
-      value:     safeValue,
+      initialValue:     safeValue,
       validator: validator,
       decoration: InputDecoration(
         labelText:  label,

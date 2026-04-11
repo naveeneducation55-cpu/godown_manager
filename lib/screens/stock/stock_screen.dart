@@ -10,13 +10,8 @@
 //   • Total row per item shows sum across all locations
 //   • Summary strip shows total quantity across entire inventory
 //   • Search works in both views
-//
-// Design spec applied:
-//   • padding: 12px, border-radius: 12px, gap: 10px
-//   • font: Inter / monospace for data
-//   • heading 18/600, body 14/400, label 12/500
-//   • large clickable areas
-//   • theme adaptive (light/dark)
+//   • Each godown card collapses independently (ValueKey fix)
+//   • Bale numbers shown per movement under each item
 // ─────────────────────────────────────────────────────────────────────────────
 
 import 'package:flutter/material.dart';
@@ -124,11 +119,10 @@ class _StockScreenState extends State<StockScreen> {
                     onTap:    () => setState(() => _viewMode = _ViewMode.byItem),
                   ),
                   const Spacer(),
-                  // Total items in stock count
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
-                      color: t.primary.withValues(alpha:0.08),
+                      color: t.primary.withValues(alpha: 0.08),
                       borderRadius: BorderRadius.circular(AppSpacing.radiusXs),
                     ),
                     child: Text(
@@ -171,7 +165,7 @@ class _StockScreenState extends State<StockScreen> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SUMMARY STRIP — overview numbers
+// SUMMARY STRIP
 // ═══════════════════════════════════════════════════════════════════════════
 
 class _SummaryStrip extends StatelessWidget {
@@ -183,26 +177,21 @@ class _SummaryStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = context.appTheme;
 
-    final zeroItems = data.items
-        .where((i) => data.totalStockForItem(i.id) <= 0)
-        .length;
+    final zeroItems   = data.items.where((i) => data.totalStockForItem(i.id) <= 0).length;
     final activeItems = data.items.length - zeroItems;
 
     return Row(children: [
       _StatBox(label: 'locations', value: '${data.locations.length}'),
       const SizedBox(width: AppSpacing.sm),
-      _StatBox(label: 'in stock', value: '$activeItems'),
+      _StatBox(label: 'in stock',  value: '$activeItems'),
       const SizedBox(width: AppSpacing.sm),
-      _StatBox(
-          label: 'zero stock',
-          value: '$zeroItems',
-          warn:  zeroItems > 0),
+      _StatBox(label: 'zero stock', value: '$zeroItems', warn: zeroItems > 0),
     ]);
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// LOCATION VIEW — grouped by godown/shop
+// LOCATION VIEW
 // ═══════════════════════════════════════════════════════════════════════════
 
 class _LocationView extends StatelessWidget {
@@ -217,7 +206,6 @@ class _LocationView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Group stock by location, filtering by search
     final grouped = <String, List<StockBalance>>{};
     for (final s in allStock) {
       if (s.balance <= 0) continue;
@@ -229,7 +217,6 @@ class _LocationView extends StatelessWidget {
       grouped.putIfAbsent(s.location.name, () => []).add(s);
     }
 
-    // Sort: godowns first, shop last
     final sortedKeys = grouped.keys.toList()
       ..sort((a, b) {
         final aType = allStock.firstWhere((s) => s.location.name == a).location.type;
@@ -255,9 +242,11 @@ class _LocationView extends StatelessWidget {
         final name    = sortedKeys[i];
         final entries = grouped[name]!;
         return _GodownCard(
+          key:          ValueKey(name),
           locationName: name,
           locationType: entries.first.location.type,
           entries:      entries,
+          movements:    data.sortedMovements,
         );
       },
     );
@@ -265,7 +254,7 @@ class _LocationView extends StatelessWidget {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ITEM VIEW — grouped by item, shows locations where stored
+// ITEM VIEW
 // ═══════════════════════════════════════════════════════════════════════════
 
 class _ItemView extends StatelessWidget {
@@ -280,8 +269,7 @@ class _ItemView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Get all items (including zero stock ones)
-    final q = search.toLowerCase();
+    final q             = search.toLowerCase();
     final filteredItems = data.items.where((item) {
       if (search.isNotEmpty && !item.name.toLowerCase().contains(q)) return false;
       return true;
@@ -301,14 +289,14 @@ class _ItemView extends StatelessWidget {
       itemCount: filteredItems.length,
       separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm + 2),
       itemBuilder: (_, i) {
-        final item = filteredItems[i];
-        // Get stock entries for this item across all locations
-        final entries = allStock.where((s) => s.item.id == item.id).toList();
+        final item     = filteredItems[i];
+        final entries  = allStock.where((s) => s.item.id == item.id).toList();
         final totalQty = entries.fold<double>(0, (sum, e) => sum + e.balance);
         return _ItemCard(
-          item:     item,
-          entries:  entries,
-          totalQty: totalQty,
+          item:      item,
+          entries:   entries,
+          totalQty:  totalQty,
+          movements: data.sortedMovements,
         );
       },
     );
@@ -316,24 +304,26 @@ class _ItemView extends StatelessWidget {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ITEM CARD — shows one item and all locations where it's stored
+// ITEM CARD — By Item view
 // ═══════════════════════════════════════════════════════════════════════════
 
 class _ItemCard extends StatefulWidget {
-  final ItemModel          item;
-  final List<StockBalance> entries;
-  final double             totalQty;
+  final ItemModel           item;
+  final List<StockBalance>  entries;
+  final double              totalQty;
+  final List<MovementModel> movements;
   const _ItemCard({
     required this.item,
     required this.entries,
     required this.totalQty,
+    required this.movements,
   });
   @override
   State<_ItemCard> createState() => _ItemCardState();
 }
 
 class _ItemCardState extends State<_ItemCard> {
-  bool _expanded = true;
+  bool _expanded = false;
 
   @override
   Widget build(BuildContext context) {
@@ -341,7 +331,6 @@ class _ItemCardState extends State<_ItemCard> {
     final isZero = widget.totalQty <= 0;
     final accent = isZero ? t.error : t.primary;
 
-    // Format total
     final totalDisplay = widget.totalQty == widget.totalQty.truncateToDouble()
         ? widget.totalQty.toInt().toString()
         : widget.totalQty.toStringAsFixed(1);
@@ -351,7 +340,7 @@ class _ItemCardState extends State<_ItemCard> {
         color:        t.surface,
         borderRadius: BorderRadius.circular(AppSpacing.radius),
         border: Border.all(
-          color: isZero ? t.error.withValues(alpha:0.3) : t.border,
+          color: isZero ? t.error.withValues(alpha: 0.3) : t.border,
           width: 0.8,
         ),
       ),
@@ -370,11 +359,10 @@ class _ItemCardState extends State<_ItemCard> {
           child: Padding(
             padding: const EdgeInsets.all(AppSpacing.md),
             child: Row(children: [
-              // Item avatar
               Container(
                 width: 38, height: 38,
                 decoration: BoxDecoration(
-                  color: accent.withValues(alpha:0.1),
+                  color: accent.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
                 ),
                 child: Center(
@@ -386,22 +374,21 @@ class _ItemCardState extends State<_ItemCard> {
                 ),
               ),
               const SizedBox(width: AppSpacing.md),
-              // Item name + unit
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(widget.item.name, style: TextStyle(
-                        fontFamily:  AppFonts.sans,
-                        fontSize:    14,
-                        fontWeight:  FontWeight.w600,
-                        color:       t.text)),
+                        fontFamily: AppFonts.sans,
+                        fontSize:   14,
+                        fontWeight: FontWeight.w600,
+                        color:      t.text)),
                     const SizedBox(height: 2),
                     Row(children: [
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                         decoration: BoxDecoration(
-                          color: accent.withValues(alpha:0.08),
+                          color: accent.withValues(alpha: 0.08),
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(widget.item.unit,
@@ -418,13 +405,12 @@ class _ItemCardState extends State<_ItemCard> {
                   ],
                 ),
               ),
-              // Total quantity badge
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
                   color: isZero
-                      ? t.error.withValues(alpha:0.1)
-                      : t.primary.withValues(alpha:0.1),
+                      ? t.error.withValues(alpha: 0.1)
+                      : t.primary.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(AppSpacing.radiusXs),
                 ),
                 child: Text(
@@ -453,14 +439,12 @@ class _ItemCardState extends State<_ItemCard> {
         if (_expanded && widget.entries.isNotEmpty) ...[
           Divider(height: 0, color: t.border),
           ...widget.entries.where((e) => e.balance > 0).map((e) =>
-            _LocationRow(entry: e)),
-          // Zero stock footer if applicable
+            _LocationRow(entry: e, movements: widget.movements)),
           if (widget.entries.any((e) => e.balance <= 0))
             ...widget.entries.where((e) => e.balance <= 0).map((e) =>
-              _LocationRow(entry: e, isZero: true)),
+              _LocationRow(entry: e, movements: widget.movements, isZero: true)),
         ],
 
-        // Zero stock message if no entries at all
         if (widget.entries.isEmpty)
           Container(
             padding: const EdgeInsets.symmetric(
@@ -479,18 +463,29 @@ class _ItemCardState extends State<_ItemCard> {
 
 // ── Location row inside item card ─────────────────────────────────────────────
 class _LocationRow extends StatelessWidget {
-  final StockBalance entry;
-  final bool         isZero;
-  const _LocationRow({required this.entry, this.isZero = false});
+  final StockBalance        entry;
+  final List<MovementModel> movements;
+  final bool                isZero;
+  const _LocationRow({
+    required this.entry,
+    required this.movements,
+    this.isZero = false,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final t = context.appTheme;
-    final v = entry.balance;
+    final t       = context.appTheme;
+    final v       = entry.balance;
     final display = v == v.truncateToDouble()
         ? v.toInt().toString()
         : v.toStringAsFixed(1);
-    final isShop = entry.location.type == 'shop';
+    final isShop  = entry.location.type == 'shop';
+
+    final incomingMvts = movements.where((m) =>
+        !m.isDeleted &&
+        m.itemId       == entry.item.id &&
+        m.toLocationId == entry.location.id,
+    ).toList();
 
     return Container(
       decoration: BoxDecoration(
@@ -498,72 +493,123 @@ class _LocationRow extends StatelessWidget {
               bottom: BorderSide(color: t.border, width: 0.5))),
       padding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.md, vertical: AppSpacing.sm + 2),
-      child: Row(children: [
-        Icon(
-          isShop ? Icons.storefront_outlined : Icons.warehouse_outlined,
-          size: 14, color: isZero ? t.text3 : (isShop ? t.success : t.primary),
-        ),
-        const SizedBox(width: AppSpacing.sm),
-        Expanded(
-          child: Text(entry.location.name, style: TextStyle(
-              fontFamily:  AppFonts.sans,
-              fontSize:    13,
-              fontWeight:  FontWeight.w500,
-              color:       isZero ? t.text3 : t.text)),
-        ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-          decoration: BoxDecoration(
-            color: isShop ? t.success.withValues(alpha:0.08) : t.primary.withValues(alpha:0.08),
-            borderRadius: BorderRadius.circular(4),
-          ),
-          child: Text(entry.location.type,
-              style: AppFonts.monoStyle(size: 10, color: isShop ? t.success : t.primary)),
-        ),
-        const SizedBox(width: AppSpacing.sm),
-        Text(
-          isZero ? '0' : display,
-          style: AppFonts.monoStyle(
-            size:   14,
-            weight: FontWeight.w700,
-            color:  isZero ? t.text3 : t.text,
-          ),
-        ),
-        const SizedBox(width: 5),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-          decoration: BoxDecoration(
-            color: t.primary.withValues(alpha:0.08),
-            borderRadius: BorderRadius.circular(4),
-          ),
-          child: Text(entry.item.unit,
-              style: AppFonts.monoStyle(size: 10, color: t.primary)),
-        ),
-      ]),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Icon(
+              isShop ? Icons.storefront_outlined : Icons.warehouse_outlined,
+              size: 14, color: isZero ? t.text3 : (isShop ? t.success : t.primary),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            Expanded(
+              child: Text(entry.location.name, style: TextStyle(
+                  fontFamily: AppFonts.sans,
+                  fontSize:   13,
+                  fontWeight: FontWeight.w500,
+                  color:      isZero ? t.text3 : t.text)),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: isShop
+                    ? t.success.withValues(alpha: 0.08)
+                    : t.primary.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(entry.location.type,
+                  style: AppFonts.monoStyle(
+                      size: 10, color: isShop ? t.success : t.primary)),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            Text(
+              isZero ? '0' : display,
+              style: AppFonts.monoStyle(
+                size:   14,
+                weight: FontWeight.w700,
+                color:  isZero ? t.text3 : t.text,
+              ),
+            ),
+            const SizedBox(width: 5),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: t.primary.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(entry.item.unit,
+                  style: AppFonts.monoStyle(size: 10, color: t.primary)),
+            ),
+          ]),
+
+          // Bale sub-lines — only for movements with bale number
+          if (incomingMvts.any((m) =>
+              m.baleNo != null && m.baleNo!.isNotEmpty)) ...[
+            const SizedBox(height: 6),
+            ...incomingMvts
+                .where((m) => m.baleNo != null && m.baleNo!.isNotEmpty)
+                .map((m) {
+              final qty = m.quantity == m.quantity.truncateToDouble()
+                  ? m.quantity.toInt().toString()
+                  : m.quantity.toStringAsFixed(1);
+              return Padding(
+                padding: const EdgeInsets.only(left: 22, bottom: 3),
+                child: Row(children: [
+                  Icon(Icons.subdirectory_arrow_right_rounded,
+                      size: 12, color: t.text3),
+                  const SizedBox(width: 4),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: t.primary.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      m.baleNo!,
+                      style: AppFonts.monoStyle(
+                          size:   11,
+                          color:  t.primary,
+                          weight: FontWeight.w600),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '$qty ${entry.item.unit}',
+                    style: AppFonts.monoStyle(size: 11, color: t.text2),
+                  ),
+                ]),
+              );
+            }),
+          ],
+        ],
+      ),
     );
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// GODOWN CARD — same as before but expanded by default
+// GODOWN CARD — By Location view
 // ═══════════════════════════════════════════════════════════════════════════
 
 class _GodownCard extends StatefulWidget {
-  final String             locationName;
-  final String             locationType;
-  final List<StockBalance> entries;
+  final String              locationName;
+  final String              locationType;
+  final List<StockBalance>  entries;
+  final List<MovementModel> movements;
   const _GodownCard({
+    super.key,
     required this.locationName,
     required this.locationType,
     required this.entries,
+    required this.movements,
   });
   @override
   State<_GodownCard> createState() => _GodownCardState();
 }
 
 class _GodownCardState extends State<_GodownCard> {
-  // Checkpoint 2: Expanded by default — user shouldn't have to tap to see stock
-  bool _expanded = true;
+  bool _expanded = false;
 
   @override
   Widget build(BuildContext context) {
@@ -571,8 +617,7 @@ class _GodownCardState extends State<_GodownCard> {
     final isShop = widget.locationType == 'shop';
     final accent = isShop ? t.success : t.primary;
 
-    // Total quantity in this location
-    final totalQty = widget.entries.fold<double>(0, (sum, e) => sum + e.balance);
+    final totalQty     = widget.entries.fold<double>(0, (sum, e) => sum + e.balance);
     final totalDisplay = totalQty == totalQty.truncateToDouble()
         ? totalQty.toInt().toString()
         : totalQty.toStringAsFixed(1);
@@ -585,7 +630,7 @@ class _GodownCardState extends State<_GodownCard> {
       ),
       child: Column(children: [
 
-        // Header — tap to expand/collapse
+        // Header
         InkWell(
           onTap: () => setState(() => _expanded = !_expanded),
           borderRadius: BorderRadius.vertical(
@@ -600,7 +645,7 @@ class _GodownCardState extends State<_GodownCard> {
               Container(
                 width: 38, height: 38,
                 decoration: BoxDecoration(
-                  color: accent.withValues(alpha:0.1),
+                  color: accent.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
                 ),
                 child: Icon(
@@ -616,10 +661,10 @@ class _GodownCardState extends State<_GodownCard> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(widget.locationName, style: TextStyle(
-                        fontFamily:  AppFonts.sans,
-                        fontSize:    15,
-                        fontWeight:  FontWeight.w600,
-                        color:       t.text)),
+                        fontFamily: AppFonts.sans,
+                        fontSize:   17,
+                        fontWeight: FontWeight.w700,
+                        color:      t.text)),
                     const SizedBox(height: 2),
                     Text(
                       '${widget.entries.length} item'
@@ -630,10 +675,9 @@ class _GodownCardState extends State<_GodownCard> {
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 8, vertical: 3),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: accent.withValues(alpha:0.1),
+                  color: accent.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(AppSpacing.radiusXs),
                 ),
                 child: Text(widget.locationType,
@@ -650,27 +694,38 @@ class _GodownCardState extends State<_GodownCard> {
           ),
         ),
 
-        // Item rows — shown when expanded
+        // Item rows
         if (_expanded) ...[
           Divider(height: 0, color: t.border),
-          ...widget.entries.map((e) => _ItemRow(entry: e)),
+          ...widget.entries.map((e) => _ItemRow(
+            entry:     e,
+            movements: widget.movements,
+          )),
         ],
       ]),
     );
   }
 }
 
+// ── Item row inside godown card ───────────────────────────────────────────────
 class _ItemRow extends StatelessWidget {
-  final StockBalance entry;
-  const _ItemRow({required this.entry});
+  final StockBalance        entry;
+  final List<MovementModel> movements;
+  const _ItemRow({required this.entry, required this.movements});
 
   @override
   Widget build(BuildContext context) {
-    final t = context.appTheme;
-    final v = entry.balance;
+    final t       = context.appTheme;
+    final v       = entry.balance;
     final display = v == v.truncateToDouble()
         ? v.toInt().toString()
         : v.toStringAsFixed(1);
+
+    final incomingMvts = movements.where((m) =>
+        !m.isDeleted &&
+        m.itemId       == entry.item.id &&
+        m.toLocationId == entry.location.id,
+    ).toList();
 
     return Container(
       decoration: BoxDecoration(
@@ -678,43 +733,90 @@ class _ItemRow extends StatelessWidget {
               bottom: BorderSide(color: t.border, width: 0.6))),
       padding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.md, vertical: AppSpacing.sm + 3),
-      child: Row(children: [
-        Container(
-          width: 30, height: 30,
-          decoration: BoxDecoration(
-            color: t.primary.withValues(alpha:0.07),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Center(
-            child: Text(
-              entry.item.name[0].toUpperCase(),
-              style: AppFonts.monoStyle(
-                  size: 13, weight: FontWeight.w700, color: t.primary),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Main row
+          Row(children: [
+            Container(
+              width: 30, height: 30,
+              decoration: BoxDecoration(
+                color: t.primary.withValues(alpha: 0.07),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Center(
+                child: Text(
+                  entry.item.name[0].toUpperCase(),
+                  style: AppFonts.monoStyle(
+                      size: 13, weight: FontWeight.w700, color: t.primary),
+                ),
+              ),
             ),
-          ),
-        ),
-        const SizedBox(width: AppSpacing.sm + 2),
-        Expanded(
-          child: Text(entry.item.name, style: TextStyle(
-              fontFamily:  AppFonts.sans,
-              fontSize:    13,
-              fontWeight:  FontWeight.w500,
-              color:       t.text)),
-        ),
-        Text(display,
-            style: AppFonts.monoStyle(
-                size: 14, weight: FontWeight.w700, color: t.text)),
-        const SizedBox(width: 5),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-          decoration: BoxDecoration(
-            color: t.primary.withValues(alpha:0.08),
-            borderRadius: BorderRadius.circular(4),
-          ),
-          child: Text(entry.item.unit,
-              style: AppFonts.monoStyle(size: 11, color: t.primary)),
-        ),
-      ]),
+            const SizedBox(width: AppSpacing.sm + 2),
+            Expanded(
+              child: Text(entry.item.name, style: TextStyle(
+                  fontFamily: AppFonts.sans,
+                  fontSize:   15,
+                  fontWeight: FontWeight.w500,
+                  color:      t.text)),
+            ),
+            Text(display,
+                style: AppFonts.monoStyle(
+                    size: 16, weight: FontWeight.w700, color: t.text)),
+            const SizedBox(width: 5),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: t.primary.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(entry.item.unit,
+                  style: AppFonts.monoStyle(size: 11, color: t.primary)),
+            ),
+          ]),
+
+          // Bale sub-lines — only for movements with bale number
+          if (incomingMvts.any((m) =>
+              m.baleNo != null && m.baleNo!.isNotEmpty)) ...[
+            const SizedBox(height: 6),
+            ...incomingMvts
+                .where((m) => m.baleNo != null && m.baleNo!.isNotEmpty)
+                .map((m) {
+              final qty = m.quantity == m.quantity.truncateToDouble()
+                  ? m.quantity.toInt().toString()
+                  : m.quantity.toStringAsFixed(1);
+              return Padding(
+                padding: const EdgeInsets.only(left: 38, bottom: 3),
+                child: Row(children: [
+                  Icon(Icons.subdirectory_arrow_right_rounded,
+                      size: 12, color: t.text3),
+                  const SizedBox(width: 4),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: t.primary.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      m.baleNo!,
+                      style: AppFonts.monoStyle(
+                          size:   11,
+                          color:  t.primary,
+                          weight: FontWeight.w600),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '$qty ${entry.item.unit}',
+                    style: AppFonts.monoStyle(size: 11, color: t.text2),
+                  ),
+                ]),
+              );
+            }),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -740,10 +842,10 @@ class _StatBox extends StatelessWidget {
         padding: const EdgeInsets.symmetric(
             horizontal: AppSpacing.sm, vertical: AppSpacing.sm),
         decoration: BoxDecoration(
-          color: warn ? t.error.withValues(alpha:0.07) : t.surface,
+          color: warn ? t.error.withValues(alpha: 0.07) : t.surface,
           borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
           border: Border.all(
-              color: warn ? t.error.withValues(alpha:0.3) : t.border,
+              color: warn ? t.error.withValues(alpha: 0.3) : t.border,
               width: 0.8),
         ),
         child: Column(children: [
@@ -761,9 +863,9 @@ class _StatBox extends StatelessWidget {
 }
 
 class _ViewChip extends StatelessWidget {
-  final IconData   icon;
-  final String     label;
-  final bool       selected;
+  final IconData     icon;
+  final String       label;
+  final bool         selected;
   final VoidCallback onTap;
   const _ViewChip({
     required this.icon,

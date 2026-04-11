@@ -19,7 +19,7 @@ class DatabaseHelper {
   static Database? _db;
 
   static const _dbName = 'godown_inventory.db';
-  static const _dbVersion = 3;
+  static const _dbVersion = 4;
 
   static const tItems     = 'items';
   static const tLocations = 'locations';
@@ -90,6 +90,7 @@ class DatabaseHelper {
             sync_status     TEXT    NOT NULL DEFAULT 'pending'
                                     CHECK(sync_status IN ('pending','synced')),
             remark          TEXT,
+            bale_no         TEXT,
             is_deleted      INTEGER NOT NULL DEFAULT 0
           )
         ''');
@@ -114,13 +115,20 @@ class DatabaseHelper {
     debugPrint('DatabaseHelper: tables created — empty, no seed');
   }
 
-  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
-    if (oldVersion < 2) {
-      await db.execute(
-        'ALTER TABLE $tMovements ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0',
-      );
-      debugPrint('DatabaseHelper: migrated v1→v2 — is_deleted added to movements');
-    }
+  
+   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+      if (oldVersion < 2) {
+        await db.execute(
+          'ALTER TABLE $tMovements ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0',
+        );
+        debugPrint('DatabaseHelper: migrated v1→v2 — is_deleted added to movements');
+      }
+      if (oldVersion < 4) {
+        await db.execute(
+          'ALTER TABLE $tMovements ADD COLUMN bale_no TEXT',
+        );
+        debugPrint('DatabaseHelper: migrated v3→v4 — bale_no added to movements');
+      }
     if (oldVersion < 3) {
       await db.execute('''
           CREATE TABLE IF NOT EXISTS $tSettings (
@@ -529,12 +537,13 @@ Future<bool> upsertMovementFromRemote(Map<String, dynamic> remote) async {
         'staff_id':      remote['staff_id']?.toString(),
         'created_at':    remote['created_at']?.toString(),
         'updated_at':    remoteTs,
-        'edited':        remote['edited'] == true ? 1 : 0,
-        'edited_by':     remote['edited_by']?.toString(),
-        'sync_status':   'synced',
-        'remark':        remote['remark'],
-        'is_deleted':    (remote['is_deleted'] == true || remote['is_deleted'] == 1) ? 1 : 0,
-      });
+          'edited':        remote['edited'] == true ? 1 : 0,
+          'edited_by':     remote['edited_by']?.toString(),
+          'sync_status':   'synced',
+          'remark':        remote['remark'],
+          'bale_no':       remote['bale_no'],
+          'is_deleted':    (remote['is_deleted'] == true || remote['is_deleted'] == 1) ? 1 : 0,
+        });
       return true;
     } else {
       final localTs         = existing.first['updated_at'] as String;
@@ -563,6 +572,7 @@ Future<bool> upsertMovementFromRemote(Map<String, dynamic> remote) async {
           'updated_at':    remoteTs,
           'sync_status':   'synced',
           'remark':        remote['remark'],
+          'bale_no':       remote['bale_no'],
           'is_deleted':    (remote['is_deleted'] == true || remote['is_deleted'] == 1) ? 1 : 0,
         }, where: 'movement_id = ?', whereArgs: [remoteId]);
         return true;
@@ -570,19 +580,9 @@ Future<bool> upsertMovementFromRemote(Map<String, dynamic> remote) async {
 
       // Timestamps equal — remote edit may have same precision as local
       // Accept remote if local is already synced (not a pending local change)
+            // Timestamps equal and already synced — data is identical, no update needed
       if (remoteTs == localTs && localSyncStatus == 'synced') {
-        await d.update(tMovements, {
-          'quantity':      remote['quantity'],
-          'from_location': remote['from_location']?.toString(),
-          'to_location':   remote['to_location']?.toString(),
-          'edited':        remote['edited'] == true ? 1 : 0,
-          'edited_by':     remote['edited_by']?.toString(),
-          'updated_at':    remoteTs,
-          'sync_status':   'synced',
-          'remark':        remote['remark'],
-          'is_deleted':    (remote['is_deleted'] == true || remote['is_deleted'] == 1) ? 1 : 0,
-        }, where: 'movement_id = ?', whereArgs: [remoteId]);
-        return true;
+        return false;
       }
 
       // Local is newer (pending) — keep local, it will push to Supabase

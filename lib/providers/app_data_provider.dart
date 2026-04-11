@@ -113,6 +113,7 @@ class MovementModel {
   String?        editedBy;
   DateTime?      editedAt;
   String?        remark;
+  String?        baleNo;
   String         syncStatus;
   bool           isDeleted;
 
@@ -128,6 +129,7 @@ class MovementModel {
     this.editedBy,
     this.editedAt,
     this.remark,
+    this.baleNo,
     this.syncStatus = 'pending',
     this.isDeleted  = false,
   });
@@ -146,6 +148,7 @@ class MovementModel {
         ? DateTime.parse(m['updated_at'] as String)
         : null,
     remark:         m['remark']      as String?,
+    baleNo:         m['bale_no']     as String?,
     syncStatus:     m['sync_status'] as String,
     isDeleted:      (m['is_deleted']  as int? ?? 0) == 1,
   );
@@ -649,6 +652,9 @@ class AppDataProvider extends ChangeNotifier {
   }) async {
     try {
       final now = DateTime.now().toUtc();
+      debugPrint('DEBUG now utc: ${now.toIso8601String()}');
+debugPrint('DEBUG now local: ${now.toLocal().toIso8601String()}');
+debugPrint('DEBUG today local: ${DateTime.now().toIso8601String()}');
       await DatabaseHelper.instance.updateItem(id, {
         'item_name':  name,
         'unit':       unit,
@@ -801,14 +807,18 @@ class AppDataProvider extends ChangeNotifier {
   // MOVEMENTS
   // ═══════════════════════════════════════════════════════════════════════════
 
-  Future<bool> addMovement({
+
+  Future<bool> addMovement({  
   required String itemId,
   required String fromLocationId,
   required String toLocationId,
   required double quantity,
   required String staffId,
   String?         remark,
+  String?         baleNo,
+
 }) async {
+  debugPrint('DEBUG addMovement called — staffId=$staffId qty=$quantity');
   if (quantity <= 0 || fromLocationId == toLocationId) {
     debugPrint('addMovement: invalid params'); return false;
   }
@@ -824,6 +834,7 @@ class AppDataProvider extends ChangeNotifier {
       return false;
     }
   }
+  
   try {
     final now   = DateTime.now().toUtc();
     final mvtId = await IdGenerator.instance.movement();
@@ -840,6 +851,8 @@ class AppDataProvider extends ChangeNotifier {
       'edited_by':     null,
       'sync_status':   'pending',
       'remark':        remark,
+      'bale_no':       baleNo,
+
     });
     _movements.insert(0, MovementModel(
       id:             mvtId,
@@ -850,6 +863,7 @@ class AppDataProvider extends ChangeNotifier {
       quantity:       quantity,
       createdAt:      now,
       remark:         remark,
+      baleNo:         baleNo,
     ));
     _invalidateCaches();
     _notify();
@@ -866,6 +880,8 @@ class AppDataProvider extends ChangeNotifier {
     required String fromLocationId,
     required String toLocationId,
     String?         remark,
+    String?         baleNo,
+
   }) async {
     if (quantity <= 0)                  { debugPrint('editMovement: qty <= 0');    return false; }
     if (fromLocationId == toLocationId) { debugPrint('editMovement: from == to'); return false; }
@@ -877,6 +893,7 @@ class AppDataProvider extends ChangeNotifier {
         'from_location': fromLocationId,
         'to_location':   toLocationId,
         'remark':        remark,
+         'bale_no':       baleNo,
         'edited':        1,
         'edited_by':     staffId,
         'updated_at':    now.toIso8601String(),
@@ -887,6 +904,7 @@ class AppDataProvider extends ChangeNotifier {
       m.fromLocationId = fromLocationId;
       m.toLocationId   = toLocationId;
       m.remark         = remark;
+      m.baleNo         = baleNo;
       m.edited         = true;
       m.editedBy       = staffId;
       m.editedAt       = now;
@@ -967,6 +985,7 @@ class AppDataProvider extends ChangeNotifier {
     'edited_by':     row['edited_by']?.toString(),
     'sync_status':   'synced',
     'remark':        row['remark']?.toString(),
+    'bale_no':       row['bale_no']?.toString(),
     'is_deleted':    (row['is_deleted'] == true || row['is_deleted'] == 1) ? 1 : 0,
   };
 

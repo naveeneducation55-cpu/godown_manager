@@ -79,11 +79,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   static String _fmtDate(DateTime d) {
+    final local = d.toLocal();
     const mo = [
       'Jan','Feb','Mar','Apr','May','Jun',
       'Jul','Aug','Sep','Oct','Nov','Dec'
     ];
-    return '${d.day} ${mo[d.month - 1]} ${d.year}';
+    return '${local.day} ${mo[local.month - 1]} ${local.year}';
   }
 
   @override
@@ -110,7 +111,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 padding: const EdgeInsets.symmetric(
                     horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: t.primary.withOpacity(0.1),
+                  color: t.primary.withValues(alpha: .1),
                   borderRadius:
                       BorderRadius.circular(AppSpacing.radiusXs),
                 ),
@@ -259,10 +260,15 @@ class _LogRowState extends State<_LogRow> {
     final t     = context.appTheme;
      final today = DateTime.now();
     final m     = widget.movement;
-    final sameDay = m.createdAt.year  == today.year  &&
-                    m.createdAt.month == today.month &&
-                    m.createdAt.day   == today.day;
-
+    final sameDay = m.createdAt.toLocal().year  == today.year  &&
+                    m.createdAt.toLocal().month == today.month &&
+                    m.createdAt.toLocal().day   == today.day;
+  debugPrint('DEBUG confirmDelete '
+    'createdAt=${m.createdAt} '
+    'createdAtLocal=${m.createdAt.toLocal()} '
+    'today=$today '
+    'isUtc=${m.createdAt.isUtc} '
+    'sameDay=$sameDay');
     // Block edit/delete of movements not from today
     if (!sameDay) {
       await showDialog(
@@ -462,13 +468,12 @@ class _LogRowState extends State<_LogRow> {
     // Regular movements: allow edit only if not from supplier
     
     final isSupplierMovement = m.fromLocationId == 'SUPPLIER';
-    final today      = DateTime.now();
-    final sameDay    = m.createdAt.year  == today.year  &&
-                       m.createdAt.month == today.month &&
-                       m.createdAt.day   == today.day;
-    // Can only edit/delete movements created today
-    final canEdit    = sameDay && (isAdmin || !m.edited);
-    final canDelete  = sameDay && isAdmin;
+    final today   = DateTime.now();
+    final sameDay = m.createdAt.toLocal().year  == today.year  &&
+                    m.createdAt.toLocal().month == today.month &&
+                    m.createdAt.toLocal().day   == today.day;
+    final canEdit   = sameDay && (isAdmin || !m.edited);
+    final canDelete = sameDay && isAdmin;
 
     // ── Row content ──────────────────────────────────────────────────────────
     final rowContent = GestureDetector(
@@ -493,60 +498,75 @@ class _LogRowState extends State<_LogRow> {
               TextSpan(children: [
                 TextSpan(
                   text:  _fmtTime(m.createdAt),
-                  style: AppFonts.monoStyle(size: 12, color: t.text3),
+                  style: AppFonts.monoStyle(size: 13, color: t.text3),
                 ),
                 TextSpan(
                   text:  '  ·  ',
-                  style: AppFonts.monoStyle(size: 12, color: t.border),
+                  style: AppFonts.monoStyle(size: 13, color: t.border),
                 ),
                 TextSpan(
                   text:  staff.name,
                   style: AppFonts.monoStyle(
-                      size:   12,
+                      size:   13,
                       color:  t.text2,
                       weight: FontWeight.w600),
                 ),
                 TextSpan(
                   text:  '  ·  ',
-                  style: AppFonts.monoStyle(size: 12, color: t.border),
+                  style: AppFonts.monoStyle(size: 13, color: t.border),
                 ),
                 TextSpan(
                   text:  '$qty ${item?.unit ?? ''}',
                   style: AppFonts.monoStyle(
-                      size:   13,
+                      size:   15,
                       color:  t.primary,
                       weight: FontWeight.w700),
                 ),
                 TextSpan(
                   text:  ' ${item?.name ?? '—'}',
                   style: AppFonts.monoStyle(
-                      size:   13,
+                      size:   15,
                       color:  t.text,
                       weight: FontWeight.w700),
                 ),
                 TextSpan(
                   text:  '  ·  ',
-                  style: AppFonts.monoStyle(size: 12, color: t.border),
+                  style: AppFonts.monoStyle(size: 13, color: t.border),
                 ),
                 TextSpan(
                   text:  '$fromName → ${to?.name ?? '—'}',
-                  style: AppFonts.monoStyle(size: 12, color: t.text2),
+                  style: AppFonts.monoStyle(size: 13, color: t.text2),
                 ),
               ]),
               softWrap: true,
             ),
-            if (m.edited) ...[
+            if (m.baleNo != null && m.baleNo!.isNotEmpty) ...[
               const SizedBox(height: 4),
               Text.rich(TextSpan(children: [
                 TextSpan(
+                  text:  '# ',
+                  style: AppFonts.monoStyle(size: 13, color: t.text3),
+                ),
+                TextSpan(
+                  text:  m.baleNo!,
+                  style: AppFonts.monoStyle(
+                      size: 13, color: t.text2,
+                      weight: FontWeight.w600),
+                ),
+              ])),
+            ],
+            if (m.edited) ...[
+              const SizedBox(height: 5),
+              Text.rich(TextSpan(children: [
+                TextSpan(
                   text:  '✎ ',
-                  style: AppFonts.monoStyle(size: 11, color: t.warnFg),
+                  style: AppFonts.monoStyle(size: 13, color: t.warnFg),
                 ),
                 TextSpan(
                   text: editedByStaff != null
                       ? 'edited by ${editedByStaff.name}'
                       : 'edited',
-                  style: AppFonts.monoStyle(size: 11, color: t.warnFg),
+                  style: AppFonts.monoStyle(size: 13, color: t.warnFg),
                 ),
               ])),
             ],
@@ -591,9 +611,10 @@ class _LogRowState extends State<_LogRow> {
   }
 
   static String _fmtTime(DateTime d) {
-    final h    = d.hour % 12 == 0 ? 12 : d.hour % 12;
-    final min  = d.minute.toString().padLeft(2, '0');
-    final ampm = d.hour >= 12 ? 'PM' : 'AM';
+    final local = d.toLocal();
+    final h     = local.hour % 12 == 0 ? 12 : local.hour % 12;
+    final min   = local.minute.toString().padLeft(2, '0');
+    final ampm  = local.hour >= 12 ? 'PM' : 'AM';
     return '$h:$min $ampm';
   }
 }
@@ -633,6 +654,7 @@ class _EditSheet extends StatefulWidget {
 
 class _EditSheetState extends State<_EditSheet> {
   late final TextEditingController _qtyCtrl;
+  late final TextEditingController _baleNoCtrl;
   late final TextEditingController _remarkCtrl;
   final _formKey = GlobalKey<FormState>();
   LocationModel? _fromLoc;
@@ -648,6 +670,8 @@ class _EditSheetState extends State<_EditSheet> {
         text: m.quantity == m.quantity.truncateToDouble()
             ? m.quantity.toInt().toString()
             : m.quantity.toStringAsFixed(1));
+            
+    _baleNoCtrl = TextEditingController(text: m.baleNo ?? '');
     _remarkCtrl = TextEditingController(text: m.remark ?? '');
     _fromLoc      = widget.data.getLocationById(m.fromLocationId);
     _toLoc        = widget.data.getLocationById(m.toLocationId);
@@ -707,6 +731,9 @@ class _EditSheetState extends State<_EditSheet> {
       quantity:       qty,
       fromLocationId: _fromLoc!.id,
       toLocationId:   _toLoc!.id,
+      baleNo:         _baleNoCtrl.text.trim().isEmpty
+          ? null
+          : _baleNoCtrl.text.trim(),
       remark:         _remarkCtrl.text.trim().isEmpty
           ? null
           : _remarkCtrl.text.trim(),
@@ -761,7 +788,8 @@ class _EditSheetState extends State<_EditSheet> {
       padding: EdgeInsets.fromLTRB(16, 12, 16, 16 + bot),
       child: Form(
         key: _formKey,
-        child: Column(
+        child: SingleChildScrollView(
+          child: Column(
           mainAxisSize:       MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -906,7 +934,18 @@ class _EditSheetState extends State<_EditSheet> {
                 onChanged: (v) => setState(() => _toLoc = v),
                 validator: (_) => _toLoc == null ? 'Required' : null,
               ),
-
+            // Bale No / LR No — optional
+            TextFormField(
+              controller:  _baleNoCtrl,
+              maxLines:    1,
+              style:       AppFonts.body(color: t.text),
+              decoration:  InputDecoration(
+                labelText:  'Bale No / LR No (optional)',
+                prefixIcon: Icon(Icons.tag_rounded,
+                    size: 18, color: t.text3),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.sm),
             // Remark
             TextFormField(
               controller: _remarkCtrl,
@@ -932,7 +971,8 @@ class _EditSheetState extends State<_EditSheet> {
               onTap:   _submit,
               loading: _isSaving,
             ),
-          ],
+         ],
+          ),
         ),
       ),
     );

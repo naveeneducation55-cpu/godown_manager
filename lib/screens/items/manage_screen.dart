@@ -58,7 +58,7 @@ class _ManageScreenState extends State<ManageScreen>
               unselectedLabelColor: t.text3,
               indicatorColor:      t.primary,
               indicatorWeight:     2,
-              labelStyle: TextStyle(
+              labelStyle: const TextStyle(
                   fontFamily: AppFonts.sans,
                   fontSize:   13,
                   fontWeight: FontWeight.w600),

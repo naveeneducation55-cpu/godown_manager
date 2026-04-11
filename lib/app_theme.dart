@@ -304,7 +304,7 @@ class AppTheme {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
           ),
-          textStyle: TextStyle(
+          textStyle: const TextStyle(
             fontFamily:  AppFonts.sans,
             fontSize:    12,
             fontWeight:  FontWeight.w500,
