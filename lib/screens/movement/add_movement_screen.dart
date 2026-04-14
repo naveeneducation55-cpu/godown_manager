@@ -158,6 +158,21 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
 
       if (!mounted) return;
 
+      if (!ok) {
+        // Check if bale validation failed
+        final baleTyped = _baleNoCtrl.text.trim().isNotEmpty;
+        if (baleTyped && !_isRestock) {
+          showError(context,
+              'Bale number "${_baleNoCtrl.text.trim()}" not found at '
+              '${_selectedFrom?.name ?? 'this location'}.\n'
+              'Only existing bale numbers can be used.');
+        } else {
+          showError(context, 'Could not save movement. Check stock levels.');
+        }
+        setState(() => _isSaving = false);
+        return;
+      }
+
       if (ok) {
         showSuccess(
           context,
@@ -384,19 +399,35 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
 
                   const SizedBox(height: AppSpacing.md),
 
-                  // Bale No / LR No — optional
-                  const SectionLabel('Bale No / LR No (optional)'),
-                  TextFormField(
-                    controller:  _baleNoCtrl,
-                    maxLines:    1,
-                    style:       AppFonts.body(color: t.text),
-                    decoration:  InputDecoration(
-                      hintText:   'e.g. 1247/1, LR-2024/456',
-                      prefixIcon: Icon(Icons.tag_rounded,
-                          size: 18, color: t.text3),
+                  // Bale No — only on SUPPLIER arrivals
+                  if (_isRestock) ...[
+                    const SectionLabel('Bale No / LR No (optional)'),
+                    TextFormField(
+                      controller:  _baleNoCtrl,
+                      maxLines:    1,
+                      style:       AppFonts.body(color: t.text),
+                      decoration:  InputDecoration(
+                        hintText:   'e.g. 1247/1, LR-2024/456',
+                        prefixIcon: Icon(Icons.tag_rounded,
+                            size: 18, color: t.text3),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: AppSpacing.sm),
+                    const SizedBox(height: AppSpacing.sm),
+                  ] else ...[
+                    // Transfer movement — bale typed if moving specific parcel
+                    const SectionLabel('Bale No (if moving specific parcel)'),
+                    TextFormField(
+                      controller:  _baleNoCtrl,
+                      maxLines:    1,
+                      style:       AppFonts.body(color: t.text),
+                      decoration:  InputDecoration(
+                        hintText:   'Must match existing bale at From location',
+                        prefixIcon: Icon(Icons.tag_rounded,
+                            size: 18, color: t.text3),
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                  ],
 
                   // Remark — optional
                   const SectionLabel('Remark (optional)'),

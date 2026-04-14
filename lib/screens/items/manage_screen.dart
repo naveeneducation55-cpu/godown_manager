@@ -419,16 +419,18 @@ class _GodownsTabState extends State<_GodownsTab> {
   void _openAdd(BuildContext ctx) => _showLocSheet(
     context:  ctx,
     existing: null,
-    onSave: (n, tp) =>
-        ctx.read<AppDataProvider>().addLocation(name: n, type: tp),
+    onSave: (n, tp, isFinal) =>
+        ctx.read<AppDataProvider>().addLocation(
+            name: n, type: tp, isFinalDestination: isFinal),
   );
+
 
   void _openEdit(BuildContext ctx, LocationModel loc) => _showLocSheet(
     context:  ctx,
     existing: loc,
-    onSave: (n, tp) =>
+    onSave: (n, tp, isFinal) =>
         ctx.read<AppDataProvider>()
-            .editLocation(id: loc.id, name: n, type: tp),
+            .editLocation(id: loc.id, name: n, type: tp, isFinalDestination: isFinal),
   );
 
   Future<void> _delete(BuildContext ctx, LocationModel loc) async {
@@ -493,7 +495,7 @@ class _GodownsTabState extends State<_GodownsTab> {
 void _showLocSheet({
   required BuildContext   context,
   required LocationModel? existing,
-  required void Function(String, String) onSave,
+  required void Function(String, String, bool) onSave,
 }) {
   showModalBottomSheet(
     context:            context,
@@ -505,24 +507,26 @@ void _showLocSheet({
 
 class _LocSheet extends StatefulWidget {
   final LocationModel? existing;
-  final void Function(String, String) onSave;
+  final void Function(String, String, bool) onSave;
   const _LocSheet({required this.existing, required this.onSave});
   @override
   State<_LocSheet> createState() => _LocSheetState();
 }
 
 class _LocSheetState extends State<_LocSheet> {
-  final _nameCtrl = TextEditingController();
-  final _formKey  = GlobalKey<FormState>();
-  String _type    = 'godown';
+ final _nameCtrl         = TextEditingController();
+  final _formKey          = GlobalKey<FormState>();
+  String _type            = 'godown';
+  bool   _isFinalDestination = false;
   bool get _isEdit => widget.existing != null;
 
   @override
   void initState() {
     super.initState();
     if (_isEdit) {
-      _nameCtrl.text = widget.existing!.name;
-      _type          = widget.existing!.type;
+      _nameCtrl.text       = widget.existing!.name;
+      _type                = widget.existing!.type;
+      _isFinalDestination  = widget.existing!.isFinalDestination;
     }
   }
 
@@ -531,7 +535,7 @@ class _LocSheetState extends State<_LocSheet> {
 
   void _submit() {
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    widget.onSave(_nameCtrl.text.trim(), _type);
+    widget.onSave(_nameCtrl.text.trim(), _type, _isFinalDestination);
     Navigator.of(context).pop();
   }
 

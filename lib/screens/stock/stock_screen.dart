@@ -481,11 +481,25 @@ class _LocationRow extends StatelessWidget {
         : v.toStringAsFixed(1);
     final isShop  = entry.location.type == 'shop';
 
-    final incomingMvts = movements.where((m) =>
+    // Bales that have left this location via any outgoing movement
+    final outgoingBaleNos = movements.where((m) =>
+        !m.isDeleted &&
+        m.itemId         == entry.item.id &&
+        m.fromLocationId == entry.location.id &&
+        m.baleNo != null && m.baleNo!.isNotEmpty,
+    ).map((m) => m.baleNo!).toSet();
+
+    // Incoming movements with bale that have NOT left yet
+    final visibleBales = movements.where((m) =>
         !m.isDeleted &&
         m.itemId       == entry.item.id &&
-        m.toLocationId == entry.location.id,
+        m.toLocationId == entry.location.id &&
+        m.baleNo != null && m.baleNo!.isNotEmpty &&
+        !outgoingBaleNos.contains(m.baleNo!),
     ).toList();
+
+    // If this location is a final destination — never show bale sub-lines
+    final isFinalDest = entry.location.isFinalDestination;
 
     return Container(
       decoration: BoxDecoration(
@@ -543,13 +557,11 @@ class _LocationRow extends StatelessWidget {
           ]),
 
           // Bale sub-lines — only for movements with bale number
-          if (incomingMvts.any((m) =>
-              m.baleNo != null && m.baleNo!.isNotEmpty)) ...[
+          // Bale sub-lines — only if bale still present and not a final destination
+          if (!isFinalDest && visibleBales.isNotEmpty) ...[
             const SizedBox(height: 6),
-            ...incomingMvts
-                .where((m) => m.baleNo != null && m.baleNo!.isNotEmpty)
-                .map((m) {
-              final qty = m.quantity == m.quantity.truncateToDouble()
+            ...visibleBales.map((m) {
+               final qty = m.quantity == m.quantity.truncateToDouble()
                   ? m.quantity.toInt().toString()
                   : m.quantity.toStringAsFixed(1);
               return Padding(
@@ -721,11 +733,25 @@ class _ItemRow extends StatelessWidget {
         ? v.toInt().toString()
         : v.toStringAsFixed(1);
 
-    final incomingMvts = movements.where((m) =>
+    // Bales that have left this location via any outgoing movement
+    final outgoingBaleNos = movements.where((m) =>
+        !m.isDeleted &&
+        m.itemId         == entry.item.id &&
+        m.fromLocationId == entry.location.id &&
+        m.baleNo != null && m.baleNo!.isNotEmpty,
+    ).map((m) => m.baleNo!).toSet();
+
+    // Incoming movements with bale that have NOT left yet
+    final visibleBales = movements.where((m) =>
         !m.isDeleted &&
         m.itemId       == entry.item.id &&
-        m.toLocationId == entry.location.id,
+        m.toLocationId == entry.location.id &&
+        m.baleNo != null && m.baleNo!.isNotEmpty &&
+        !outgoingBaleNos.contains(m.baleNo!),
     ).toList();
+
+    // If this location is a final destination — never show bale sub-lines
+    final isFinalDest = entry.location.isFinalDestination;
 
     return Container(
       decoration: BoxDecoration(
@@ -775,13 +801,10 @@ class _ItemRow extends StatelessWidget {
             ),
           ]),
 
-          // Bale sub-lines — only for movements with bale number
-          if (incomingMvts.any((m) =>
-              m.baleNo != null && m.baleNo!.isNotEmpty)) ...[
+          // Bale sub-lines — only if bale still present and not a final destination
+          if (!isFinalDest && visibleBales.isNotEmpty) ...[
             const SizedBox(height: 6),
-            ...incomingMvts
-                .where((m) => m.baleNo != null && m.baleNo!.isNotEmpty)
-                .map((m) {
+            ...visibleBales.map((m) {
               final qty = m.quantity == m.quantity.truncateToDouble()
                   ? m.quantity.toInt().toString()
                   : m.quantity.toStringAsFixed(1);

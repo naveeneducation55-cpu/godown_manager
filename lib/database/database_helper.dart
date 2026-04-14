@@ -19,7 +19,7 @@ class DatabaseHelper {
   static Database? _db;
 
   static const _dbName = 'godown_inventory.db';
-  static const _dbVersion = 4;
+  static const _dbVersion = 5;
 
   static const tItems     = 'items';
   static const tLocations = 'locations';
@@ -60,7 +60,8 @@ class DatabaseHelper {
             type          TEXT    NOT NULL CHECK(type IN ('godown','shop')),
             created_at    TEXT    NOT NULL,
             updated_at    TEXT    NOT NULL,
-            is_deleted    INTEGER NOT NULL DEFAULT 0
+            is_deleted    INTEGER NOT NULL DEFAULT 0,
+             is_final_destination INTEGER NOT NULL DEFAULT 0
           )
         ''');
 
@@ -128,6 +129,12 @@ class DatabaseHelper {
           'ALTER TABLE $tMovements ADD COLUMN bale_no TEXT',
         );
         debugPrint('DatabaseHelper: migrated v3→v4 — bale_no added to movements');
+      }
+      if (oldVersion < 5) {
+        await db.execute(
+          'ALTER TABLE $tLocations ADD COLUMN is_final_destination INTEGER NOT NULL DEFAULT 0',
+        );
+        debugPrint('DatabaseHelper: migrated v4→v5 — is_final_destination added to locations');
       }
     if (oldVersion < 3) {
       await db.execute('''
@@ -338,6 +345,10 @@ class DatabaseHelper {
               (remote['is_deleted'] == true || remote['is_deleted'] == 1)
                   ? 1
                   : 0,
+          'is_final_destination':
+              (remote['is_final_destination'] == true || remote['is_final_destination'] == 1)
+                  ? 1
+                  : 0,
         },
         conflictAlgorithm: ConflictAlgorithm.replace);
   }
@@ -498,15 +509,16 @@ Future<void> batchUpsertMasterFromRemote({
       }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
     for (final row in locations) {
-      await txn.insert(tLocations, {
-        'location_id':   row['location_id']?.toString(),
-        'location_name': row['location_name']?.toString(),
-        'type':          row['type']?.toString(),
-        'created_at':    row['created_at']?.toString(),
-        'updated_at':    row['updated_at']?.toString(),
-        'is_deleted':    (row['is_deleted'] == true || row['is_deleted'] == 1) ? 1 : 0,
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
-    }
+        await txn.insert(tLocations, {
+          'location_id':         row['location_id']?.toString(),
+          'location_name':       row['location_name']?.toString(),
+          'type':                row['type']?.toString(),
+          'created_at':          row['created_at']?.toString(),
+          'updated_at':          row['updated_at']?.toString(),
+          'is_deleted':          (row['is_deleted'] == true || row['is_deleted'] == 1) ? 1 : 0,
+          'is_final_destination': (row['is_final_destination'] == true || row['is_final_destination'] == 1) ? 1 : 0,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
     for (final row in staff) {
       await txn.insert(tStaff, {
         'staff_id':   row['staff_id']?.toString(),

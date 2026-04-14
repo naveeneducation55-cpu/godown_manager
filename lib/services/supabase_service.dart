@@ -419,9 +419,10 @@ bool get isChannelHealthy => _isSubscribed && _channel != null;  // ← here
       final active  = locations.where((l) => l['is_deleted'] != 1 && l['is_deleted'] != true).toList();
 
       if (active.isNotEmpty) {
-        await _client
-            .from('locations')
-            .upsert(active, onConflict: 'location_id', ignoreDuplicates: false)
+        // is_final_destination is included in the locations map from getAllLocations()
+      await _client
+          .from('locations')
+          .upsert(locations, onConflict: 'location_id', ignoreDuplicates: false)
             .timeout(const Duration(seconds: 8));
       }
       for (final loc in deleted) {

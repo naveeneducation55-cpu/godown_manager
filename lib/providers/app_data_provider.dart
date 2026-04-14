@@ -53,6 +53,7 @@ class LocationModel {
   String         name;
   String         type;
   bool           isDeleted;
+  bool           isFinalDestination;
   final DateTime createdAt;
   DateTime       updatedAt;
 
@@ -60,18 +61,20 @@ class LocationModel {
     required this.id,
     required this.name,
     required this.type,
-    this.isDeleted = false,
+    this.isDeleted          = false,
+    this.isFinalDestination = false,
     required this.createdAt,
     required this.updatedAt,
   });
 
   factory LocationModel.fromMap(Map<String, dynamic> m) => LocationModel(
-    id:        m['location_id']   as String,
-    name:      m['location_name'] as String,
-    type:      m['type']          as String,
-    isDeleted: (m['is_deleted']   as int) == 1,
-    createdAt: DateTime.parse(m['created_at'] as String),
-    updatedAt: DateTime.parse(m['updated_at'] as String),
+    id:                 m['location_id']            as String,
+    name:               m['location_name']          as String,
+    type:               m['type']                   as String,
+    isDeleted:          (m['is_deleted']             as int) == 1,
+    isFinalDestination: (m['is_final_destination']   as int? ?? 0) == 1,
+    createdAt:          DateTime.parse(m['created_at'] as String),
+    updatedAt:          DateTime.parse(m['updated_at'] as String),
   );
 }
 
@@ -687,19 +690,31 @@ debugPrint('DEBUG today local: ${DateTime.now().toIso8601String()}');
   // LOCATIONS
   // ═══════════════════════════════════════════════════════════════════════════
 
-  Future<void> addLocation({required String name, required String type}) async {
+  Future<void> addLocation({
+    required String name,
+    required String type,
+    bool isFinalDestination = false,
+  }) async {
     try {
       final now   = DateTime.now().toUtc();
       final locId = await IdGenerator.instance.location();
       await DatabaseHelper.instance.insertLocation({
-        'location_id':   locId,
-        'location_name': name,
-        'type':          type,
-        'created_at':    now.toIso8601String(),
-        'updated_at':    now.toIso8601String(),
-        'is_deleted':    0,
+        'location_id':         locId,
+        'location_name':       name,
+        'type':                type,
+        'created_at':          now.toIso8601String(),
+        'updated_at':          now.toIso8601String(),
+        'is_deleted':          0,
+        'is_final_destination': isFinalDestination ? 1 : 0,
       });
-      _locations.add(LocationModel(id: locId, name: name, type: type, createdAt: now, updatedAt: now));
+      _locations.add(LocationModel(
+        id:                 locId,
+        name:               name,
+        type:               type,
+        isFinalDestination: isFinalDestination,
+        createdAt:          now,
+        updatedAt:          now,
+      ));
       SyncService.instance.markMasterDirty();
       _notify();
     } catch (e) { debugPrint('addLocation error: $e'); }
@@ -709,16 +724,20 @@ debugPrint('DEBUG today local: ${DateTime.now().toIso8601String()}');
     required String id,
     required String name,
     required String type,
+    bool isFinalDestination = false,
   }) async {
     try {
       final now = DateTime.now().toUtc();
       await DatabaseHelper.instance.updateLocation(id, {
-        'location_name': name,
-        'type':          type,
-        'updated_at':    now.toIso8601String(),
+        'location_name':       name,
+        'type':                type,
+        'updated_at':          now.toIso8601String(),
+        'is_final_destination': isFinalDestination ? 1 : 0,
       });
       final loc = _locations.firstWhere((l) => l.id == id);
-      loc.name = name; loc.type = type; loc.updatedAt = now;
+      loc.name = name; loc.type = type;
+      loc.isFinalDestination = isFinalDestination;
+      loc.updatedAt = now;
       SyncService.instance.markMasterDirty();
       _notify();
     } catch (e) { debugPrint('editLocation($id): $e'); }
@@ -833,6 +852,18 @@ debugPrint('DEBUG today local: ${DateTime.now().toIso8601String()}');
       debugPrint('addMovement: blocked — qty $quantity > available $available');
       return false;
     }
+    // Bale validation — if bale typed, must exist as incoming at from-location
+    if (baleNo != null && baleNo!.isNotEmpty) {
+      final baleExists = _movements.any((m) =>
+          !m.isDeleted &&
+          m.itemId       == itemId &&
+          m.toLocationId == fromLocationId &&
+          m.baleNo       == baleNo);
+      if (!baleExists) {
+        debugPrint('addMovement: bale $baleNo not found at $fromLocationId');
+        return false;
+      }
+    }
   }
   
   try {
@@ -885,6 +916,19 @@ debugPrint('DEBUG today local: ${DateTime.now().toIso8601String()}');
   }) async {
     if (quantity <= 0)                  { debugPrint('editMovement: qty <= 0');    return false; }
     if (fromLocationId == toLocationId) { debugPrint('editMovement: from == to'); return false; }
+    // Bale validation on edit — same rule as addMovement
+    if (fromLocationId != 'SUPPLIER' && baleNo != null && baleNo!.isNotEmpty) {
+      final baleExists = _movements.any((m) =>
+          !m.isDeleted &&
+          m.id           != movementId &&  // exclude self
+          m.itemId       == itemId &&
+          m.toLocationId == fromLocationId &&
+          m.baleNo       == baleNo);
+      if (!baleExists) {
+        debugPrint('editMovement: bale $baleNo not found at $fromLocationId');
+        return false;
+      }
+    }
     try {
       final now     = DateTime.now().toUtc();
       final staffId = _currentStaff?.id;

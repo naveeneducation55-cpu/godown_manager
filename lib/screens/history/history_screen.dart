@@ -934,18 +934,20 @@ class _EditSheetState extends State<_EditSheet> {
                 onChanged: (v) => setState(() => _toLoc = v),
                 validator: (_) => _toLoc == null ? 'Required' : null,
               ),
-            // Bale No / LR No — optional
-            TextFormField(
-              controller:  _baleNoCtrl,
-              maxLines:    1,
-              style:       AppFonts.body(color: t.text),
-              decoration:  InputDecoration(
-                labelText:  'Bale No / LR No (optional)',
-                prefixIcon: Icon(Icons.tag_rounded,
-                    size: 18, color: t.text3),
+           // Bale No — SUPPLIER arrivals only for editing
+            if (widget.movement.fromLocationId == 'SUPPLIER') ...[
+              TextFormField(
+                controller:  _baleNoCtrl,
+                maxLines:    1,
+                style:       AppFonts.body(color: t.text),
+                decoration:  InputDecoration(
+                  labelText:  'Bale No / LR No (optional)',
+                  prefixIcon: Icon(Icons.tag_rounded,
+                      size: 18, color: t.text3),
+                ),
               ),
-            ),
-            const SizedBox(height: AppSpacing.sm),
+              const SizedBox(height: AppSpacing.sm),
+            ],
             // Remark
             TextFormField(
               controller: _remarkCtrl,
