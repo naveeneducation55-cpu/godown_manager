@@ -2,6 +2,8 @@ Set-Content .gitignore @"
 # Personal notes
 .md files/
 docs/
+websites-preview/
+assets/
 
 # Editor
 .vscode/
@@ -30,3 +32,4 @@ lib/screens/home/ui-design-spec.md
 # allow only these two from docs
 !docs/CHECKPOINT_v2.2.0.md
 !docs/DEVELOPMENT_JOURNAL_v2.0.0.md
+!websites-preview/index.html

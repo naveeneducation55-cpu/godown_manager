@@ -118,7 +118,7 @@ class DatabaseHelper {
   
    Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
       if (oldVersion < 2) {
-        await db.execute(
+        await db.execute(   
           'ALTER TABLE $tMovements ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0',
         );
         debugPrint('DatabaseHelper: migrated v1→v2 — is_deleted added to movements');

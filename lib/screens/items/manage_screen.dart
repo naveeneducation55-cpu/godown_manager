@@ -7,12 +7,12 @@ import '../../providers/app_data_provider.dart';
 
 // Supported units
 const _units = [
-  'pcs','kg','gram','ton','litre','ml','dozen','box','bag','bundle',
+  'pcs','kg','gram','ton','litre','ml','dozen','box','bag','bundle','than','mtr','pkt'
 ];
 String _unitDesc(String u) => const {
   'pcs':'pieces','kg':'kilogram','gram':'gram','ton':'metric ton',
   'litre':'litre','ml':'millilitre','dozen':'12 pieces',
-  'box':'box','bag':'bag','bundle':'bundle',
+  'box':'box','bag':'bag','bundle':'bundle','than':'than','mtr':'meter','pkt':'packet'
 }[u] ?? '';
 
 // ─── Main tabbed screen ───────────────────────────────────────────────────────
