@@ -254,8 +254,8 @@ bool get isChannelHealthy => _isSubscribed && _channel != null;  // ← here
       final sinceStr = since.toIso8601String();
       final results  = await Future.wait([
         _client.from('items')    .select().gte('updated_at', sinceStr).timeout(const Duration(seconds: 8)),
-        _client.from('locations').select().gte('updated_at', sinceStr).timeout(const Duration(seconds: 8)),
-       _client.from('staff').select().timeout(const Duration(seconds: 8)),
+        _client.from('locations').select().gte('updated_at', sinceStr).timeout(const Duration(seconds: 10)),
+       _client.from('staff').select().timeout(const Duration(seconds: 12)),
       ]);
       return SyncResult.ok({
         'items':     List<Map<String,dynamic>>.from(results[0]),

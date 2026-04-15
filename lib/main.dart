@@ -75,9 +75,12 @@ class _GodownAppState extends State<GodownApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      debugPrint('App resumed — reconnecting realtime + pushing pending');
+      debugPrint('App resumed — reconnecting realtime + push + pull');
       SyncService.instance.reconnectRealtime();
       SyncService.instance.pushNow();
+      // Pull missed changes after push completes
+      Future.delayed(const Duration(seconds: 5),
+          SyncService.instance.backgroundPullAll);
     }
   }
 

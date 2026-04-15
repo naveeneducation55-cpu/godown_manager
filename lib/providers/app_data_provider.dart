@@ -405,10 +405,16 @@ class AppDataProvider extends ChangeNotifier {
     _invalidateCaches();
   }
 
-  void _backgroundRefresh() {
-    Future.delayed(const Duration(seconds: 2), () async {
+ void _backgroundRefresh() {
+    // Delay 6s — gives startAutoSync pushNow (t=4s) time to complete
+    // so backgroundPullAll does not hit the mutex and skip silently
+    Future.delayed(const Duration(seconds: 6), () async {
       try {
+        // Step 1 — push any pending from offline period
+        await SyncService.instance.pushNow();
+        // Step 2 — pull all missed changes from Supabase since lastSyncAt
         await SyncService.instance.backgroundPullAll();
+        // Step 3 — reload SQLite into memory
         await _reloadMasterData();
         await _reloadMovements();
         debugPrint('AppDataProvider: background refresh complete');

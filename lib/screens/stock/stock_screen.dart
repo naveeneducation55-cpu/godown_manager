@@ -351,10 +351,10 @@ class _ItemCardState extends State<_ItemCard> {
               ? () => setState(() => _expanded = !_expanded)
               : null,
           borderRadius: BorderRadius.vertical(
-            top: Radius.circular(AppSpacing.radius),
+            top: const Radius.circular(AppSpacing.radius),
             bottom: _expanded && widget.entries.isNotEmpty
                 ? Radius.zero
-                : Radius.circular(AppSpacing.radius),
+                : const Radius.circular(AppSpacing.radius),
           ),
           child: Padding(
             padding: const EdgeInsets.all(AppSpacing.md),
@@ -646,10 +646,10 @@ class _GodownCardState extends State<_GodownCard> {
         InkWell(
           onTap: () => setState(() => _expanded = !_expanded),
           borderRadius: BorderRadius.vertical(
-            top: Radius.circular(AppSpacing.radius),
+            top: const Radius.circular(AppSpacing.radius),
             bottom: _expanded
                 ? Radius.zero
-                : Radius.circular(AppSpacing.radius),
+                : const Radius.circular(AppSpacing.radius),
           ),
           child: Padding(
             padding: const EdgeInsets.all(AppSpacing.md),
