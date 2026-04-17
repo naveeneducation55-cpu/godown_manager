@@ -242,7 +242,7 @@ Future<void> _loadLastSyncAt() async {
     _isSyncing = true;
     try {
       await _pushPending();
-      _updateLastSyncAt();
+      //_updateLastSyncAt();
     } catch (e) {
       debugPrint('SyncService.pushNow error: $e');
     } finally {
@@ -338,7 +338,7 @@ Future<void> _loadLastSyncAt() async {
 
       final pulled = await _pullMovements();
 
-      _updateLastSyncAt();
+     // _updateLastSyncAt();
       _pushedCount = pushed;
 
       if (!silent) _setStatus(SyncStatus.done);
@@ -489,11 +489,11 @@ Future<void> _loadLastSyncAt() async {
 
   Future<int> _pullMovements() async {
     try {
-      final db    = DatabaseHelper.instance;
-      // 5-min overlap catches any edge cases at boundary
-      final since = _effectiveSince();
-
+      final db     = DatabaseHelper.instance;
+      final since  = _effectiveSince();
+      debugPrint('DEBUG pullMovements since=$since lastSyncAt=$_lastSyncAt');
       final result = await SupabaseService.instance.pullMovementsSince(since);
+      debugPrint('DEBUG pullMovements result=${result.isSuccess} count=${result.data?.length}');
       if (!result.isSuccess) return 0;
 
       final remote = result.data!;

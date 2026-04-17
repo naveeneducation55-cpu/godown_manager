@@ -12,6 +12,7 @@
 
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../database/database_helper.dart';
 import '../services/sync_service.dart';
 import '../utils/id_generator.dart';
@@ -579,7 +580,15 @@ class AppDataProvider extends ChangeNotifier {
   bool login({required String staffId, required String pin}) {
     try {
       final s = _staff.firstWhere((s) => s.id == staffId);
-      if (s.pin == pin) { _currentStaff = s; _notifyNow(); return true; }
+      if (s.pin == pin) {
+        _currentStaff = s;
+        SharedPreferences.getInstance()
+            .then((p) => p.setString('logged_in_staff_id', staffId));
+        _notifyNow();
+        return true;
+      } else {
+        debugPrint('login failed: incorrect pin for staffId $staffId');
+      }
       return false;
     } catch (_) { return false; }
   }
@@ -592,7 +601,12 @@ class AppDataProvider extends ChangeNotifier {
     } catch (e) { debugPrint('loginWithoutPin: $e'); }
   }
 
-  void logout() { _currentStaff = null; _notifyNow(); }
+  void logout() {
+    _currentStaff = null;
+    SharedPreferences.getInstance()
+        .then((p) => p.remove('logged_in_staff_id'));
+    _notifyNow();
+  }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // ITEMS

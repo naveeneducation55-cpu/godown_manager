@@ -1,5 +1,5 @@
-name: baba_godown_inventory
-description: Offline Godown Inventory Management App - v1.0
+name: godown_inventory
+description: Offline Godown Inventory Management App - V1.2.0
 publish_to: 'none'
 version: 1.0.0+1
 

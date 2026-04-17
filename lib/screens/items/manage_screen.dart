@@ -583,6 +583,48 @@ class _LocSheetState extends State<_LocSheet> {
                 onTap:    () => setState(() => _type = 'shop'),
               ),
             ]),
+            const SizedBox(height: AppSpacing.md),
+            GestureDetector(
+              onTap: () => setState(() =>
+                  _isFinalDestination = !_isFinalDestination),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.md, vertical: AppSpacing.sm + 2),
+                decoration: BoxDecoration(
+                  color: _isFinalDestination
+                      ? t.primary.withValues(alpha: 0.08)
+                      : t.surface,
+                  borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+                  border: Border.all(
+                    color: _isFinalDestination
+                        ? t.primary.withValues(alpha: 0.4)
+                        : t.border,
+                    width: 0.8,
+                  ),
+                ),
+                child: Row(children: [
+                  Icon(
+                    _isFinalDestination
+                        ? Icons.check_box_rounded
+                        : Icons.check_box_outline_blank_rounded,
+                    size: 18,
+                    color: _isFinalDestination ? t.primary : t.text3,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Final destination',
+                          style: AppFonts.body(
+                              color: _isFinalDestination
+                                  ? t.primary : t.text)),
+                      Text('e.g. Shop, Customer — bale tracking ends here',
+                          style: AppFonts.label(color: t.text3)),
+                    ],
+                  )),
+                ]),
+              ),
+            ),
             const SizedBox(height: AppSpacing.xl),
             PrimaryButton(
               label: _isEdit ? 'Update Location' : 'Add Location',

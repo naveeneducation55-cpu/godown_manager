@@ -531,11 +531,11 @@ class _LogRowState extends State<_LogRow> {
                 ),
                 TextSpan(
                   text:  '  ·  ',
-                  style: AppFonts.monoStyle(size: 13, color: t.border),
+                  style: AppFonts.monoStyle(size: 15, color: t.border),
                 ),
                 TextSpan(
                   text:  '$fromName → ${to?.name ?? '—'}',
-                  style: AppFonts.monoStyle(size: 13, color: t.text2),
+                  style: AppFonts.monoStyle(size: 15, color: t.text2),
                 ),
               ]),
               softWrap: true,
@@ -552,6 +552,19 @@ class _LogRowState extends State<_LogRow> {
                   style: AppFonts.monoStyle(
                       size: 13, color: t.text2,
                       weight: FontWeight.w600),
+                ),
+              ])),
+            ],
+            if (m.remark != null && m.remark!.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text.rich(TextSpan(children: [
+                TextSpan(
+                  text: 'Note: ',
+                  style: AppFonts.monoStyle(size: 15, color: t.border, weight: FontWeight.w600),
+                ),
+                TextSpan(
+                  text: m.remark!,
+                  style: AppFonts.monoStyle(size: 15, color: t.border, weight: FontWeight.w600),
                 ),
               ])),
             ],
