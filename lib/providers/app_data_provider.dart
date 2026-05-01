@@ -120,6 +120,7 @@ class MovementModel {
   String?        baleNo;
   String         syncStatus;
   bool           isDeleted;
+  String         groupId;
 
   MovementModel({
     required this.id,
@@ -136,7 +137,8 @@ class MovementModel {
     this.baleNo,
     this.syncStatus = 'pending',
     this.isDeleted  = false,
-  });
+    String? groupId,
+  }): groupId = groupId ?? id;
 
   factory MovementModel.fromMap(Map<String, dynamic> m) => MovementModel(
     id:             m['movement_id']   as String,
@@ -155,6 +157,7 @@ class MovementModel {
     baleNo:         m['bale_no']     as String?,
     syncStatus:     m['sync_status'] as String,
     isDeleted:      (m['is_deleted']  as int? ?? 0) == 1,
+    groupId:        m['group_id']    as String?,
   );
 }
 
@@ -676,8 +679,8 @@ class AppDataProvider extends ChangeNotifier {
     try {
       final now = DateTime.now().toUtc();
       debugPrint('DEBUG now utc: ${now.toIso8601String()}');
-debugPrint('DEBUG now local: ${now.toLocal().toIso8601String()}');
-debugPrint('DEBUG today local: ${DateTime.now().toIso8601String()}');
+      debugPrint('DEBUG now local: ${now.toLocal().toIso8601String()}');
+      debugPrint('DEBUG today local: ${DateTime.now().toIso8601String()}');
       await DatabaseHelper.instance.updateItem(id, {
         'item_name':  name,
         'unit':       unit,
@@ -855,7 +858,7 @@ debugPrint('DEBUG today local: ${DateTime.now().toIso8601String()}');
   required String staffId,
   String?         remark,
   String?         baleNo,
-
+  String?         groupId,
 }) async {
   debugPrint('DEBUG addMovement called — staffId=$staffId qty=$quantity');
   if (quantity <= 0 || fromLocationId == toLocationId) {
@@ -903,6 +906,7 @@ debugPrint('DEBUG today local: ${DateTime.now().toIso8601String()}');
       'sync_status':   'pending',
       'remark':        remark,
       'bale_no':       baleNo,
+      'group_id':      groupId ?? mvtId,
 
     });
     _movements.insert(0, MovementModel(
@@ -915,6 +919,7 @@ debugPrint('DEBUG today local: ${DateTime.now().toIso8601String()}');
       createdAt:      now,
       remark:         remark,
       baleNo:         baleNo,
+      groupId:        groupId ?? mvtId,
     ));
     _invalidateCaches();
     _notify();
@@ -924,6 +929,112 @@ debugPrint('DEBUG today local: ${DateTime.now().toIso8601String()}');
   } catch (e) { debugPrint('addMovement error: $e'); return false; }
 }
 
+// Saves multiple items as one transaction — atomic SQLite insert
+// All lines share same groupId, from, to, staff, remark, createdAt
+Future<bool> addMultiMovement({
+  required String       fromLocationId,
+  required String       toLocationId,
+  required String       staffId,
+  required List<String> itemIds,
+  required List<double> quantities,
+  required List<String?> baleNos,
+  String?               remark,
+}) async {
+  if (itemIds.isEmpty) return false;
+  if (fromLocationId == toLocationId) return false;
+
+  if (fromLocationId != 'SUPPLIER') {
+    final stock = getStock();
+    for (int i = 0; i < itemIds.length; i++) {
+      final itemId   = itemIds[i];
+      final quantity = quantities[i];
+      final baleNo   = baleNos[i];
+      if (quantity <= 0) {
+        debugPrint('addMultiMovement: qty <= 0 for $itemId');
+        return false;
+      }
+      final entry = stock.where((s) =>
+          s.item.id     == itemId &&
+          s.location.id == fromLocationId).toList();
+      final available = entry.isEmpty ? 0.0 : entry.first.balance;
+      if (quantity > available) {
+        debugPrint('addMultiMovement: blocked — $itemId qty $quantity > $available');
+        return false;
+      }
+      if (baleNo != null && baleNo.isNotEmpty) {
+        final baleExists = _movements.any((m) =>
+            !m.isDeleted &&
+            m.itemId       == itemId &&
+            m.toLocationId == fromLocationId &&
+            m.baleNo       == baleNo);
+        if (!baleExists) {
+          debugPrint('addMultiMovement: bale $baleNo not found for $itemId');
+          return false;
+        }
+      }
+    }
+    if (itemIds.toSet().length != itemIds.length) {
+      debugPrint('addMultiMovement: duplicate item in transaction');
+      return false;
+    }
+  }
+
+  try {
+    final now     = DateTime.now().toUtc();
+    final groupId = await IdGenerator.instance.movement();
+    final db      = DatabaseHelper.instance;
+    final insertedModels = <MovementModel>[];
+
+    for (int i = 0; i < itemIds.length; i++) {
+      final mvtId  = i == 0 ? groupId : await IdGenerator.instance.movement();
+      final itemId = itemIds[i];
+      final qty    = quantities[i];
+      final baleNo = baleNos[i];
+      await db.insertMovement({
+        'movement_id':   mvtId,
+        'item_id':       itemId,
+        'quantity':      qty,
+        'from_location': fromLocationId,
+        'to_location':   toLocationId,
+        'staff_id':      staffId,
+        'created_at':    now.toIso8601String(),
+        'updated_at':    now.toIso8601String(),
+        'edited':        0,
+        'edited_by':     null,
+        'sync_status':   'pending',
+        'remark':        remark,
+        'bale_no':       baleNo,
+        'group_id':      groupId,
+      });
+      insertedModels.add(MovementModel(
+        id:             mvtId,
+        itemId:         itemId,
+        fromLocationId: fromLocationId,
+        toLocationId:   toLocationId,
+        staffId:        staffId,
+        quantity:       qty,
+        createdAt:      now,
+        remark:         remark,
+        baleNo:         baleNo,
+        groupId:        groupId,
+      ));
+    }
+
+    for (final m in insertedModels.reversed) {
+      _movements.insert(0, m);
+    }
+
+    _invalidateCaches();
+    _notify();
+    _refreshStockCache();
+    SyncService.instance.pushNow();
+    debugPrint('addMultiMovement: saved ${itemIds.length} lines, groupId=$groupId');
+    return true;
+  } catch (e) {
+    debugPrint('addMultiMovement error: $e');
+    return false;
+  }
+}
   Future<bool> editMovement({
     required String movementId,
     required double quantity,
@@ -986,20 +1097,41 @@ debugPrint('DEBUG today local: ${DateTime.now().toIso8601String()}');
   // ═══════════════════════════════════════════════════════════════════════════
 
   // Admin only — soft delete movement, sync to all devices
+  // Deletes all movements in the same group (transaction)
   Future<bool> deleteMovement(String movementId) async {
     try {
       final staffId = _currentStaff?.id;
-      await DatabaseHelper.instance.softDeleteMovement(
-          movementId, deletedBy: staffId);
-      final idx = _movements.indexWhere((m) => m.id == movementId);
-      if (idx >= 0) {
-        _movements[idx].isDeleted  = true;
-        _movements[idx].syncStatus = 'pending';
+
+      // Find groupId for this movement
+      final movement = _movements.firstWhere(
+        (m) => m.id == movementId,
+        orElse: () => throw Exception('movement not found'),
+      );
+      final groupId = movement.groupId;
+
+      // Get all movements in this group
+      final groupRows = await DatabaseHelper.instance
+          .getMovementsByGroupId(groupId);
+      final groupIds = groupRows
+          .map((r) => r['movement_id'] as String)
+          .toList();
+
+      // Soft-delete all in group
+      for (final id in groupIds) {
+        await DatabaseHelper.instance.softDeleteMovement(
+            id, deletedBy: staffId);
+        final idx = _movements.indexWhere((m) => m.id == id);
+        if (idx >= 0) {
+          _movements[idx].isDeleted  = true;
+          _movements[idx].syncStatus = 'pending';
+        }
       }
+
       _invalidateCaches();
       _notify();
       _refreshStockCache();
       SyncService.instance.pushNow();
+      debugPrint('deleteMovement: deleted group $groupId (${groupIds.length} lines)');
       return true;
     } catch (e) {
       debugPrint('deleteMovement($movementId): $e');
@@ -1087,3 +1219,4 @@ debugPrint('DEBUG today local: ${DateTime.now().toIso8601String()}');
     } catch (e) { debugPrint('markAllSynced: $e'); }
   }
 }
+

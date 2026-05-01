@@ -627,6 +627,7 @@ Future<void> _loadLastSyncAt() async {
         'remark':        m['remark'],
         'bale_no':       m['bale_no'],
         'is_deleted':    m['is_deleted'] == 1,
+        'group_id':      m['group_id'] ?? m['movement_id'],
       }).toList();
 
   static List<Map<String,dynamic>> _serialiseMaster(

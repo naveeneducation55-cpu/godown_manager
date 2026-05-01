@@ -43,8 +43,9 @@ class _StockScreenState extends State<StockScreen> {
   @override
   Widget build(BuildContext context) {
     final t    = context.appTheme;
-    final data = context.watch<AppDataProvider>();
-    final allStock = data.getStock();
+    final data     = context.read<AppDataProvider>();
+    final allStock = context.select<AppDataProvider, List<StockBalance>>(
+        (p) => p.getStock());
 
     return Scaffold(
       backgroundColor: t.bg,
@@ -207,16 +208,17 @@ class _LocationView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final grouped = <String, List<StockBalance>>{};
-    for (final s in allStock) {
+   for (final s in allStock) {
       if (s.balance <= 0) continue;
+      // When searching — exclude Customer location from results
       if (search.isNotEmpty) {
+        if (s.location.name.toLowerCase().contains('customer')) continue;
         final q = search.toLowerCase();
         if (!s.item.name.toLowerCase().contains(q) &&
             !s.location.name.toLowerCase().contains(q)) continue;
       }
       grouped.putIfAbsent(s.location.name, () => []).add(s);
     }
-
     final sortedKeys = grouped.keys.toList()
       ..sort((a, b) {
         final aType = allStock.firstWhere((s) => s.location.name == a).location.type;
@@ -285,12 +287,15 @@ class _ItemView extends StatelessWidget {
     }
 
     return ListView.separated(
-      padding: AppSizes.pagePadding(context).copyWith(top: 4, bottom: AppSpacing.lg),
+      padding: AppSizes.pagePadding(context).copyWith(top: 4, bottom: AppSpacing.lg), 
       itemCount: filteredItems.length,
       separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm + 2),
       itemBuilder: (_, i) {
         final item     = filteredItems[i];
-        final entries  = allStock.where((s) => s.item.id == item.id).toList();
+        final entries  = allStock.where((s) =>
+            s.item.id == item.id &&
+            (search.isEmpty ||
+             !s.location.name.toLowerCase().contains('customer'))).toList();
         final totalQty = entries.fold<double>(0, (sum, e) => sum + e.balance);
         return _ItemCard(
           item:      item,
@@ -735,18 +740,13 @@ class _ItemRow extends StatelessWidget {
 
     // Bales that have left this location via any outgoing movement
     final outgoingBaleNos = movements.where((m) =>
-        !m.isDeleted &&
-        m.itemId         == entry.item.id &&
         m.fromLocationId == entry.location.id &&
-        m.baleNo != null && m.baleNo!.isNotEmpty,
+        m.baleNo != null,
     ).map((m) => m.baleNo!).toSet();
 
-    // Incoming movements with bale that have NOT left yet
     final visibleBales = movements.where((m) =>
-        !m.isDeleted &&
-        m.itemId       == entry.item.id &&
         m.toLocationId == entry.location.id &&
-        m.baleNo != null && m.baleNo!.isNotEmpty &&
+        m.baleNo != null &&
         !outgoingBaleNos.contains(m.baleNo!),
     ).toList();
 

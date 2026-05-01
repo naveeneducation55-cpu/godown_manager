@@ -19,7 +19,7 @@ class DatabaseHelper {
   static Database? _db;
 
   static const _dbName = 'godown_inventory.db';
-  static const _dbVersion = 5;
+  static const _dbVersion = 6;
 
   static const tItems     = 'items';
   static const tLocations = 'locations';
@@ -92,7 +92,8 @@ class DatabaseHelper {
                                     CHECK(sync_status IN ('pending','synced')),
             remark          TEXT,
             bale_no         TEXT,
-            is_deleted      INTEGER NOT NULL DEFAULT 0
+            is_deleted      INTEGER NOT NULL DEFAULT 0,
+            group_id        TEXT
           )
         ''');
 
@@ -135,6 +136,15 @@ class DatabaseHelper {
           'ALTER TABLE $tLocations ADD COLUMN is_final_destination INTEGER NOT NULL DEFAULT 0',
         );
         debugPrint('DatabaseHelper: migrated v4→v5 — is_final_destination added to locations');
+      }
+      if (oldVersion < 6) {
+        await db.execute(
+          'ALTER TABLE $tMovements ADD COLUMN group_id TEXT',
+        );
+        await db.execute(
+          'UPDATE $tMovements SET group_id = movement_id WHERE group_id IS NULL',
+        );
+        debugPrint('DatabaseHelper: migrated v5→v6 — group_id added to movements');
       }
     if (oldVersion < 3) {
       await db.execute('''
@@ -490,6 +500,13 @@ class DatabaseHelper {
     }, where: 'movement_id = ?', whereArgs: [id]);
   }
 
+Future<List<Map<String, dynamic>>> getMovementsByGroupId(String groupId) async {
+  final d = await db;
+  return d.query(tMovements,
+      where:     'group_id = ? AND is_deleted = ?',
+      whereArgs: [groupId, 0]);
+}
+
 
 Future<void> batchUpsertMasterFromRemote({
   required List<Map<String,dynamic>> items,
@@ -555,6 +572,7 @@ Future<bool> upsertMovementFromRemote(Map<String, dynamic> remote) async {
           'remark':        remote['remark'],
           'bale_no':       remote['bale_no'],
           'is_deleted':    (remote['is_deleted'] == true || remote['is_deleted'] == 1) ? 1 : 0,
+          'group_id':      remote['group_id']?.toString() ?? remote['movement_id']?.toString(),
         });
       return true;
     } else {
@@ -586,6 +604,7 @@ Future<bool> upsertMovementFromRemote(Map<String, dynamic> remote) async {
           'remark':        remote['remark'],
           'bale_no':       remote['bale_no'],
           'is_deleted':    (remote['is_deleted'] == true || remote['is_deleted'] == 1) ? 1 : 0,
+          'group_id':      remote['group_id']?.toString() ?? remoteId,
         }, where: 'movement_id = ?', whereArgs: [remoteId]);
         return true;
       }

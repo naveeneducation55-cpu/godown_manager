@@ -5,6 +5,29 @@ import '../../app_theme.dart';
 import '../../common_widgets.dart';
 import '../../providers/app_data_provider.dart';
 
+
+// State for each item line in a multi-item movement
+class _ItemLineState {
+  ItemModel?   selectedItem;
+  final qtyCtrl    = TextEditingController();
+  final itemCtrl   = TextEditingController();
+  final baleNoCtrl = TextEditingController();
+  final itemFocus  = FocusNode();
+  List<ItemModel> visibleItems = [];
+  bool showItemList = false;
+
+  void dispose() {
+    qtyCtrl.dispose();
+    itemCtrl.dispose();
+    baleNoCtrl.dispose();
+    itemFocus.dispose();
+  }
+
+  bool get isValid =>
+      selectedItem != null &&
+      (double.tryParse(qtyCtrl.text.trim()) ?? 0) > 0;
+}
+
 class AddMovementScreen extends StatefulWidget {
   const AddMovementScreen({super.key});
   @override
@@ -13,106 +36,68 @@ class AddMovementScreen extends StatefulWidget {
 
 class _AddMovementScreenState extends State<AddMovementScreen> {
 
-  // Form state
-  ItemModel?     _selectedItem;
+  // Multi-item line state
+  final List<_ItemLineState> _lines = [_ItemLineState()];
+  
   LocationModel? _selectedFrom;
   LocationModel? _selectedTo;
   bool           _isRestock = false;
-  bool           _isSaving = false;
-
-  // Controllers — all disposed in dispose()
-  final _qtyCtrl    = TextEditingController();
-  final _itemCtrl   = TextEditingController();
-  final _baleNoCtrl = TextEditingController();
+  bool           _isSaving  = false;
   final _remarkCtrl = TextEditingController();
   final _formKey    = GlobalKey<FormState>();
-  final _itemFocus  = FocusNode();
-
-  // Item search list
-  List<ItemModel> _visibleItems = [];
-  bool            _showItemList = false;
 
   @override
   void initState() {
     super.initState();
-    _qtyCtrl.addListener(_onQtyChanged);
-    _itemFocus.addListener(_onItemFocusChanged);
+    _initLine(_lines.first);
   }
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    // Safe to read provider here
-    if (_visibleItems.isEmpty) {
-      _visibleItems = context.read<AppDataProvider>().items.take(5).toList();
-    }
+  
+   void _initLine(_ItemLineState line) {
+    line.qtyCtrl.addListener(() => setState(() {}));
+    line.itemFocus.addListener(() {
+      if (!line.itemFocus.hasFocus && mounted) {
+        Future.delayed(const Duration(milliseconds: 150), () {
+          if (mounted) setState(() => line.showItemList = false);
+        });
+      }
+    });
+    final items = context.read<AppDataProvider>().items;
+    line.visibleItems = items.take(5).toList();
   }
 
   @override
   void dispose() {
-    // Always dispose controllers and focus nodes to free memory
-    _qtyCtrl.removeListener(_onQtyChanged);
-    _itemFocus.removeListener(_onItemFocusChanged);
-    _qtyCtrl.dispose();
-    _itemCtrl.dispose();
-    _baleNoCtrl.dispose();
+    for (final line in _lines) line.dispose();
     _remarkCtrl.dispose();
-    _itemFocus.dispose();
     super.dispose();
   }
 
-  void _onQtyChanged() => setState(() {});
-
-  void _onItemFocusChanged() {
-    if (!_itemFocus.hasFocus && mounted) {
-      Future.delayed(const Duration(milliseconds: 150), () {
-        if (mounted) setState(() => _showItemList = false);
-      });
-    }
-  }
-
-  // ── Item search ──────────────────────────────────────────────────────────────
-  void _onItemType(String query) {
-    final all = context.read<AppDataProvider>().items;
-    final q   = query.toLowerCase().trim();
-    setState(() {
-      _selectedItem = null;
-      _visibleItems = q.isEmpty
-          ? all.take(5).toList()
-          : all.where((i) => i.name.toLowerCase().contains(q)).toList();
-      _showItemList = true;
-    });
-  }
-
-  void _selectItem(ItemModel item) {
-    setState(() {
-      _selectedItem = item;
-      _itemCtrl.text = item.name;
-      _showItemList  = false;
-    });
-    _itemFocus.unfocus();
-  }
-
-  void _clearItem() {
-    final all = context.read<AppDataProvider>().items;
-    setState(() {
-      _selectedItem = null;
-      _visibleItems = all.take(5).toList();
-    });
-    _itemCtrl.clear();
-  }
 
   // ── Save ─────────────────────────────────────────────────────────────────────
   Future<void> _handleSave() async {
-    // Close item list first
-    if (_showItemList) setState(() => _showItemList = false);
-
+    
     // Validate form
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
     // Guard: item must be selected
-    if (_selectedItem == null) {
-      showError(context, 'Please select an item');
+    // Validate all lines
+    for (int i = 0; i < _lines.length; i++) {
+      final line = _lines[i];
+      if (line.selectedItem == null) {
+        showError(context, 'Please select an item for line ${i + 1}');
+        return;
+      }
+      final qty = double.tryParse(line.qtyCtrl.text.trim());
+      if (qty == null || qty <= 0) {
+        showError(context, 'Enter valid quantity for line ${i + 1}');
+        return;
+      }
+    }
+    // EC3 — duplicate item check
+    final selectedIds = _lines.map((l) => l.selectedItem!.id).toList();
+    if (selectedIds.toSet().length != selectedIds.length) {
+      showError(context, 'Same item appears more than once. Combine quantities instead.');
       return;
     }
     if (_selectedFrom == null && !_isRestock) {
@@ -128,13 +113,6 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
       return;
     }
 
-    // Parse qty safely
-    final qty = double.tryParse(_qtyCtrl.text.trim());
-    if (qty == null || qty <= 0) {
-      showError(context, 'Please enter a valid quantity');
-      return;
-    }
-
     setState(() => _isSaving = true);
 
     try {
@@ -142,47 +120,51 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
       final String staffId = data.currentStaff?.id ??
     (data.staff.isNotEmpty ? data.staff.first.id : '');
 
-      final ok = await data.addMovement(
-        itemId:         _selectedItem!.id,
+      bool ok;
+    if (_lines.length == 1) {
+      // Single item — use existing addMovement
+      final line = _lines.first;
+      final qty = double.tryParse(line.qtyCtrl.text.trim()) ?? 0;
+      ok = await data.addMovement(
+        itemId:         line.selectedItem!.id,
         fromLocationId: _isRestock ? 'SUPPLIER' : _selectedFrom!.id,
         toLocationId:   _selectedTo!.id,
         quantity:       qty,
         staffId:        staffId,
-        baleNo: _baleNoCtrl.text.trim().isEmpty
-              ? null
-              : _baleNoCtrl.text.trim(),
+        baleNo: line.baleNoCtrl.text.trim().isEmpty
+            ? null : line.baleNoCtrl.text.trim(),
         remark: _remarkCtrl.text.trim().isEmpty
-            ? null
-            : _remarkCtrl.text.trim(),
+            ? null : _remarkCtrl.text.trim(),
       );
+    } else {
+      // Multi-item — use addMultiMovement
+      ok = await data.addMultiMovement(
+        fromLocationId: _isRestock ? 'SUPPLIER' : _selectedFrom!.id,
+        toLocationId:   _selectedTo!.id,
+        staffId:        staffId,
+        itemIds:   _lines.map((l) => l.selectedItem!.id).toList(),
+        quantities: _lines.map((l) =>
+            double.tryParse(l.qtyCtrl.text.trim()) ?? 0).toList(),
+        baleNos:   _lines.map((l) =>
+            l.baleNoCtrl.text.trim().isEmpty
+                ? null : l.baleNoCtrl.text.trim()).toList(),
+        remark: _remarkCtrl.text.trim().isEmpty
+            ? null : _remarkCtrl.text.trim(),
+      );
+    }
 
       if (!mounted) return;
 
       if (!ok) {
-        // Check if bale validation failed
-        final baleTyped = _baleNoCtrl.text.trim().isNotEmpty;
-        if (baleTyped && !_isRestock) {
-          showError(context,
-              'Bale number "${_baleNoCtrl.text.trim()}" not found at '
-              '${_selectedFrom?.name ?? 'this location'}.\n'
-              'Only existing bale numbers can be used.');
-        } else {
-          showError(context, 'Could not save movement. Check stock levels.');
-        }
+        showError(context, 'Could not save. Check stock levels and bale numbers.');
         setState(() => _isSaving = false);
         return;
       }
 
-      if (ok) {
-        showSuccess(
-          context,
-          '$qty ${_selectedItem!.unit} of ${_selectedItem!.name} '
-          'added to ${_selectedTo!.name}',
-        );
-        _clearForm();
-      } else {
-        showError(context, 'Not enough stock. Check available quantity.');
-      }
+      showSuccess(context,
+          '${_lines.length} item${_lines.length > 1 ? 's' : ''} '
+          'added to ${_selectedTo!.name}');
+      _clearForm();
 
     } catch (e) {
       debugPrint('addMovement error: $e');
@@ -194,9 +176,11 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
   }
 
   void _clearForm() {
-    _clearItem();
-    _qtyCtrl.clear();
-    _baleNoCtrl.clear();
+    for (final line in _lines) line.dispose();
+    _lines.clear();
+    final newLine = _ItemLineState();
+    _initLine(newLine);
+    _lines.add(newLine);
     _remarkCtrl.clear();
     if (mounted) {
       setState(() {
@@ -208,10 +192,9 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
   }
 
   bool get _canSave =>
-      _selectedItem != null &&
-      _qtyCtrl.text.trim().isNotEmpty &&
+      _lines.every((l) => l.isValid) &&
       (_isRestock || _selectedFrom != null) &&
-      _selectedTo   != null;
+      _selectedTo != null;
 
   String _timeNow() {
     final n    = DateTime.now().toUtc();
@@ -231,17 +214,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
     // Realtime sync replaces LocationModel instances with new objects.
     // DropdownButton uses == (object identity) — stale ref causes assertion crash.
     final locs  = data.locations;
-    final items = data.items;
-    if (_selectedItem != null) {
-      final fresh = items.where((i) => i.id == _selectedItem!.id).firstOrNull;
-      if (fresh != null && !identical(fresh, _selectedItem)) {
-        _selectedItem = fresh;
-        _itemCtrl.text = fresh.name;
-      } else if (fresh == null) {
-        _selectedItem = null; // item was deleted remotely
-        _itemCtrl.clear();
-      }
-    }
+    
     if (_selectedFrom != null) {
       final fresh = locs.where((l) => l.id == _selectedFrom!.id).firstOrNull;
       if (fresh != null && !identical(fresh, _selectedFrom)) {
@@ -261,8 +234,11 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
 
     return GestureDetector(
       onTap: () {
-        _itemFocus.unfocus();
-        if (_showItemList) setState(() => _showItemList = false);
+        for (final line in _lines) {
+          line.itemFocus.unfocus();
+          line.showItemList = false;
+        }
+        setState(() {});
       },
       child: Scaffold(
         backgroundColor: t.bg,
@@ -295,10 +271,25 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
                 children: [
 
                   const SectionLabel('What moved?'),
-                  _buildItemField(t, data.items),
-                  const SizedBox(height: AppSpacing.sm + 2),
-                  _buildQtyField(t),
-                  const SizedBox(height: AppSpacing.xl),
+                  ..._lines.asMap().entries.map((entry) {
+                    final idx  = entry.key;
+                    final line = entry.value;
+                    return _buildItemLine(t, data.items, line, idx);
+                  }),
+                  const SizedBox(height: AppSpacing.sm),
+                  // Add line button — hidden for restock (single item only)
+                  if (!_isRestock)
+                    TextButton.icon(
+                      onPressed: () {
+                        final newLine = _ItemLineState();
+                        _initLine(newLine);
+                        setState(() => _lines.add(newLine));
+                      },
+                      icon: Icon(Icons.add_rounded, size: 16, color: t.primary),
+                      label: Text('Add another item',
+                          style: AppFonts.body(color: t.primary)),
+                    ),
+                  const SizedBox(height: AppSpacing.md),
 
                   const SectionLabel('Movement route'),
 
@@ -356,6 +347,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
                     value:     _selectedFrom,
                     locations: data.locations,
                     exclude:   _selectedTo,
+                    excludeCustomer: true,
                     onChanged: (v) => setState(() => _selectedFrom = v),
                     validator: (_) => (!_isRestock && _selectedFrom == null)
                         ? 'From location is required' : null,
@@ -392,42 +384,7 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
 
                   const SizedBox(height: AppSpacing.xl),
 
-                  // Preview — only when all fields are filled
-                  if (_canSave &&
-                      double.tryParse(_qtyCtrl.text.trim()) != null)
-                    _buildPreview(t),
-
                   const SizedBox(height: AppSpacing.md),
-
-                  // Bale No — only on SUPPLIER arrivals
-                  if (_isRestock) ...[
-                    const SectionLabel('Bale No / LR No (optional)'),
-                    TextFormField(
-                      controller:  _baleNoCtrl,
-                      maxLines:    1,
-                      style:       AppFonts.body(color: t.text),
-                      decoration:  InputDecoration(
-                        hintText:   'e.g. 1247/1, LR-2024/456',
-                        prefixIcon: Icon(Icons.tag_rounded,
-                            size: 18, color: t.text3),
-                      ),
-                    ),
-                    const SizedBox(height: AppSpacing.sm),
-                  ] else ...[
-                    // Transfer movement — bale typed if moving specific parcel
-                    const SectionLabel('Bale No (if moving specific parcel)'),
-                    TextFormField(
-                      controller:  _baleNoCtrl,
-                      maxLines:    1,
-                      style:       AppFonts.body(color: t.text),
-                      decoration:  InputDecoration(
-                        hintText:   'Must match existing bale at From location',
-                        prefixIcon: Icon(Icons.tag_rounded,
-                            size: 18, color: t.text3),
-                      ),
-                    ),
-                    const SizedBox(height: AppSpacing.sm),
-                  ],
 
                   // Remark — optional
                   const SectionLabel('Remark (optional)'),
@@ -474,193 +431,166 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
       ),
     );
   }
-
-  // ── Item search field ─────────────────────────────────────────────────────────
-  Widget _buildItemField(AppThemeExtension t, List<ItemModel> allItems) {
-    return Column(
+Widget _buildItemLine(
+  AppThemeExtension t,
+  List<ItemModel>   allItems,
+  _ItemLineState    line,
+  int               index,
+) {
+  final isFirst = index == 0;
+  return Container(
+    margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+    padding: const EdgeInsets.all(AppSpacing.md),
+    decoration: BoxDecoration(
+      color:        t.surface,
+      borderRadius: BorderRadius.circular(AppSpacing.radius),
+      border:       Border.all(color: t.border, width: 0.8),
+    ),
+    child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        TextFormField(
-          controller:  _itemCtrl,
-          focusNode:   _itemFocus,
-          onChanged:   _onItemType,
-          onTap:       () => setState(() => _showItemList = true),
-          style:       AppFonts.body(color: t.text),
-          decoration: InputDecoration(
-            labelText: 'Item',
-            hintText:  'Tap to see items or type to search...',
-            prefixIcon: Icon(
-              Icons.inventory_2_outlined,
-              size:  18,
-              color: _selectedItem != null ? t.primary : t.text3,
+        // Line header
+        Row(children: [
+          Text('Item ${index + 1}',
+              style: AppFonts.label(color: t.text3)),
+          const Spacer(),
+          // Remove button — only for non-first lines
+          if (!isFirst)
+            GestureDetector(
+              onTap: () => setState(() {
+                line.dispose();
+                _lines.removeAt(index);
+              }),
+              child: Icon(Icons.close_rounded, size: 18, color: t.error),
             ),
-            suffix: _selectedItem != null
-                ? Row(mainAxisSize: MainAxisSize.min, children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: t.primary.withValues(alpha:0.1),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        _selectedItem!.unit,
-                        style: AppFonts.monoStyle(size: 11, color: t.primary),
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    GestureDetector(
-                      onTap: _clearItem,
-                      child: Icon(
-                        Icons.close_rounded, size: 18, color: t.text3,
-                      ),
-                    ),
-                    const SizedBox(width: 2),
-                  ])
-                : null,
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(AppSpacing.radius),
-              borderSide: BorderSide(
-                color: _selectedItem != null ? t.primary : t.border,
-                width: _selectedItem != null ? 1.5 : 0.8,
+        ]),
+        const SizedBox(height: AppSpacing.sm),
+        // Item search field
+        _buildItemFieldForLine(t, allItems, line),
+        const SizedBox(height: AppSpacing.sm),
+        // Qty + Bale row
+        Row(children: [
+          Expanded(
+            child: TextFormField(
+              controller:   line.qtyCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*')),
+              ],
+              style: AppFonts.monoStyle(
+                  size: 15, color: t.text, weight: FontWeight.w600),
+              decoration: InputDecoration(
+                labelText:  'Quantity',
+                hintText:   '0',
+                prefixIcon: Icon(Icons.scale_outlined, size: 18, color: t.text3),
+                suffix: line.selectedItem != null
+                    ? Text(line.selectedItem!.unit,
+                        style: AppFonts.monoStyle(size: 11, color: t.primary))
+                    : null,
               ),
             ),
           ),
-          validator: (_) =>
-              _selectedItem == null ? 'Please select an item' : null,
-        ),
-
-        // Dropdown list
-        if (_showItemList)
-          Container(
-            margin: const EdgeInsets.only(top: 4),
-            decoration: BoxDecoration(
-              color:        t.surface,
-              borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-              border:       Border.all(color: t.border, width: 0.8),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha:t.isDark ? 0.3 : 0.06),
-                  blurRadius: 8,
-                  offset: const Offset(0, 3),
-                ),
-              ],
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: TextFormField(
+              controller: line.baleNoCtrl,
+              style:      AppFonts.body(color: t.text),
+              decoration: InputDecoration(
+                labelText:  _isRestock ? 'Bale No' : 'Bale (optional)',
+                hintText:   _isRestock ? '1274*2' : 'match existing',
+                prefixIcon: Icon(Icons.tag_rounded, size: 18, color: t.text3),
+              ),
             ),
-            child: Column(
-              children: [
-                // Header
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.md, vertical: AppSpacing.xs + 2),
-                  decoration: BoxDecoration(
-                    border: Border(
-                      bottom: BorderSide(color: t.border, width: 0.6),
-                    ),
-                  ),
-                  child: Row(children: [
-                    Text(
-                      _itemCtrl.text.isEmpty
-                          ? 'Showing first 5 items'
-                          : '${_visibleItems.length} result'
-                            '${_visibleItems.length == 1 ? '' : 's'}',
-                      style: AppFonts.labelStyle(color: t.text3),
-                    ),
-                  ]),
-                ),
+          ),
+        ]),
+      ],
+    ),
+  );
+}
 
-                // Items or empty state
-                if (_visibleItems.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.all(AppSpacing.lg),
-                    child: Text(
-                      'No items match "${_itemCtrl.text}"',
-                      style: AppFonts.label(color: t.text3),
-                      textAlign: TextAlign.center,
-                    ),
-                  )
-                else
-                  ..._visibleItems.map((item) => InkWell(
-                    onTap: () => _selectItem(item),
-                    child: Container(
+Widget _buildItemFieldForLine(
+  AppThemeExtension t,
+  List<ItemModel>   allItems,
+  _ItemLineState    line,
+) {
+  return Column(
+    children: [
+      TextFormField(
+        controller: line.itemCtrl,
+        focusNode:  line.itemFocus,
+        onChanged: (q) {
+          final query = q.toLowerCase().trim();
+          setState(() {
+            line.selectedItem  = null;
+            line.visibleItems  = query.isEmpty
+                ? allItems.take(5).toList()
+                : allItems.where((i) =>
+                    i.name.toLowerCase().contains(query)).toList();
+            line.showItemList  = true;
+          });
+        },
+        onTap: () => setState(() => line.showItemList = true),
+        style: AppFonts.body(color: t.text),
+        decoration: InputDecoration(
+          labelText:  'Item',
+          hintText:   'Search...',
+          prefixIcon: Icon(Icons.inventory_2_outlined,
+              size: 18,
+              color: line.selectedItem != null ? t.primary : t.text3),
+          suffix: line.selectedItem != null
+              ? GestureDetector(
+                  onTap: () => setState(() {
+                    line.selectedItem = null;
+                    line.itemCtrl.clear();
+                    line.visibleItems = allItems.take(5).toList();
+                  }),
+                  child: Icon(Icons.close_rounded, size: 18, color: t.text3),
+                )
+              : null,
+        ),
+      ),
+      if (line.showItemList)
+        Container(
+          margin: const EdgeInsets.only(top: 4),
+          decoration: BoxDecoration(
+            color:        t.surface,
+            borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+            border:       Border.all(color: t.border, width: 0.8),
+          ),
+          child: Column(
+            children: line.visibleItems.isEmpty
+                ? [Padding(
+                    padding: const EdgeInsets.all(AppSpacing.md),
+                    child: Text('No items found',
+                        style: AppFonts.label(color: t.text3)),
+                  )]
+                : line.visibleItems.map((item) => InkWell(
+                    onTap: () => setState(() {
+                      line.selectedItem = item;
+                      line.itemCtrl.text = item.name;
+                      line.showItemList = false;
+                    }),
+                    child: Padding(
                       padding: const EdgeInsets.symmetric(
                           horizontal: AppSpacing.md,
                           vertical:   AppSpacing.sm + 2),
-                      decoration: BoxDecoration(
-                        border: Border(
-                          bottom: BorderSide(
-                            color: item == _visibleItems.last
-                                ? Colors.transparent : t.border,
-                            width: 0.5,
-                          ),
-                        ),
-                      ),
                       child: Row(children: [
-                        Expanded(
-                          child: Text(item.name,
-                              style: AppFonts.body(color: t.text)),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 7, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: t.primary.withValues(alpha:0.08),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            item.unit,
+                        Expanded(child: Text(item.name,
+                            style: AppFonts.body(color: t.text))),
+                        Text(item.unit,
                             style: AppFonts.monoStyle(
-                                size: 11, color: t.primary),
-                          ),
-                        ),
+                                size: 11, color: t.primary)),
                       ]),
                     ),
-                  )),
-              ],
-            ),
-          ),
-      ],
-    );
-  }
-
-  // ── Quantity field ────────────────────────────────────────────────────────────
-  Widget _buildQtyField(AppThemeExtension t) {
-    return TextFormField(
-      controller:   _qtyCtrl,
-      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      inputFormatters: [
-        FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*')),
-      ],
-      style: AppFonts.monoStyle(
-          size: 17, color: t.text, weight: FontWeight.w600),
-      decoration: InputDecoration(
-        labelText:  'Quantity',
-        hintText:   '0',
-        prefixIcon: Icon(Icons.scale_outlined, size: 18, color: t.text3),
-        suffix: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-          decoration: BoxDecoration(
-            color: _selectedItem != null
-                ? t.primary.withValues(alpha:0.1)
-                : t.border.withValues(alpha:0.5),
-            borderRadius: BorderRadius.circular(4),
-          ),
-          child: Text(
-            _selectedItem?.unit ?? '—',
-            style: AppFonts.monoStyle(
-              size:  12,
-              color: _selectedItem != null ? t.primary : t.text3,
-            ),
+                  )).toList(),
           ),
         ),
-      ),
-      validator: (val) {
-        if (val == null || val.trim().isEmpty) return 'Quantity is required';
-        final qty = double.tryParse(val.trim());
-        if (qty == null || qty <= 0) return 'Must be greater than 0';
-        return null;
-      },
-    );
-  }
+    ],
+  );
+}
+  
+
+  
 
   // ── Location dropdown ─────────────────────────────────────────────────────────
   Widget _buildLocationField({
@@ -673,9 +603,12 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
     required LocationModel?          exclude,
     required ValueChanged<LocationModel?> onChanged,
     required String? Function(LocationModel?) validator,
+    bool excludeCustomer = false,
   }) {
     final available = locations
         .where((l) => exclude == null || l.id != exclude.id)
+        .where((l) => !excludeCustomer ||
+            !l.name.toLowerCase().contains('customer'))
         .toList();
     final safeValue =
         available.any((l) => l.id == value?.id) ? value : null;
@@ -710,56 +643,6 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
     );
   }
 
-  // ── Preview card ──────────────────────────────────────────────────────────────
-  Widget _buildPreview(AppThemeExtension t) {
-    final qty = _qtyCtrl.text.trim();
-    return Container(
-      margin:  const EdgeInsets.only(bottom: AppSpacing.sm),
-      padding: const EdgeInsets.all(AppSpacing.md),
-      decoration: BoxDecoration(
-        color: t.primary.withValues(alpha:0.05),
-        borderRadius: BorderRadius.circular(AppSpacing.radius),
-        border: Border.all(color: t.primary.withValues(alpha:0.18), width: 0.8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('PREVIEW',
-              style: AppFonts.labelStyle(color: t.primary.withValues(alpha:0.6))),
-          const SizedBox(height: 8),
-          Text.rich(TextSpan(children: [
-            TextSpan(
-              text: '$qty ${_selectedItem!.unit} ',
-              style: AppFonts.monoStyle(
-                  size: 14, color: t.primary, weight: FontWeight.w700),
-            ),
-            TextSpan(
-              text: 'of ${_selectedItem!.name} → ',
-              style: AppFonts.monoStyle(
-                  size: 14, color: t.text, weight: FontWeight.w700),
-            ),
-            TextSpan(
-              text: _selectedTo!.name,
-              style: AppFonts.monoStyle(
-                  size: 14, color: t.success, weight: FontWeight.w700),
-            ),
-          ])),
-          const SizedBox(height: 5),
-          Row(children: [
-            Icon(Icons.subdirectory_arrow_right_rounded,
-                size: 13, color: t.text3),
-            const SizedBox(width: 4),
-            Text(
-              _isRestock
-                  ? 'incoming from Supplier'
-                  : 'moved from ${_selectedFrom!.name}',
-              style: AppFonts.monoStyle(size: 12, color: t.text3),
-            ),
-          ]),
-        ],
-      ),
-    );
-  }
 }
 
 // ─── Save button ──────────────────────────────────────────────────────────────
