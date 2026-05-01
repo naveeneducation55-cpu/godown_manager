@@ -225,6 +225,9 @@ class AppDataProvider extends ChangeNotifier {
   final List<LocationModel> _locations = [];
   final List<StaffModel>    _staff     = [];
   final List<MovementModel> _movements = [];
+final Map<String, ItemModel>     _itemMap     = {};
+  final Map<String, LocationModel> _locationMap = {};
+  final Map<String, StaffModel>    _staffMap    = {};
 
   StaffModel? _currentStaff;
   bool        _disposed  = false;
@@ -297,6 +300,18 @@ class AppDataProvider extends ChangeNotifier {
     _sortedDirty = true;
   }
 
+   void _rebuildMaps() {
+    _itemMap
+      ..clear()
+      ..addEntries(_items.map((i) => MapEntry(i.id, i)));
+    _locationMap
+      ..clear()
+      ..addEntries(_locations.map((l) => MapEntry(l.id, l)));
+    _staffMap
+      ..clear()
+      ..addEntries(_staff.map((s) => MapEntry(s.id, s)));
+  }
+
   @override
   void dispose() {
     _notifyTimer?.cancel();
@@ -363,9 +378,10 @@ class AppDataProvider extends ChangeNotifier {
       final staff     = await compute(_parseStaff,     results[2]);
 
       _items    ..clear()..addAll(items);
-      _locations..clear()..addAll(locations);
-      _staff    ..clear()..addAll(staff);
-      _invalidateCaches();
+    _locations..clear()..addAll(locations);
+    _staff    ..clear()..addAll(staff);
+    _rebuildMaps();
+    _invalidateCaches();
       _notifyNow();
       _refreshStockCache();
       debugPrint('AppDataProvider: master data reloaded from remote change');
@@ -388,10 +404,11 @@ class AppDataProvider extends ChangeNotifier {
       db.getMovements(limit: 99999),
     ]);
 
-    _items    ..clear()..addAll(_safeParseItems(results[0]));
+     _items    ..clear()..addAll(_safeParseItems(results[0]));
     _locations..clear()..addAll(_safeParseLocations(results[1]));
     _staff    ..clear()..addAll(_safeParseStaff(results[2]));
     _movements..clear()..addAll(_safeParseMovements(results[3]));
+    _rebuildMaps();
 
     debugPrint('AppDataProvider: loaded — '
         'items:${_items.length} locations:${_locations.length} '
@@ -633,7 +650,9 @@ class AppDataProvider extends ChangeNotifier {
         'updated_at': now.toIso8601String(),
         'is_deleted': 0,
       });
-      _items.add(ItemModel(id: itemId, name: name, unit: unit, createdAt: now, updatedAt: now));
+       final newItem = ItemModel(id: itemId, name: name, unit: unit, createdAt: now, updatedAt: now);
+    _items.add(newItem);
+    _itemMap[itemId] = newItem;
       SyncService.instance.markMasterDirty();
 
       if (openingLocationId != null && openingQty != null && openingQty > 0) {
@@ -699,15 +718,14 @@ class AppDataProvider extends ChangeNotifier {
       await DatabaseHelper.instance.softDeleteItem(id);
       final item = _items.firstWhere((i) => i.id == id);
       item.isDeleted = true; item.updatedAt = now;
+    _itemMap.remove(id);
       SyncService.instance.markMasterDirty();
       _invalidateCaches();
       _notify();
     } catch (e) { debugPrint('deleteItem($id): $e'); }
   }
 
-  ItemModel? getItemById(String id) {
-    try { return _items.firstWhere((i) => i.id == id); } catch (_) { return null; }
-  }
+ ItemModel? getItemById(String id) => _itemMap[id];
 
   // ═══════════════════════════════════════════════════════════════════════════
   // LOCATIONS
@@ -730,15 +748,10 @@ class AppDataProvider extends ChangeNotifier {
         'is_deleted':          0,
         'is_final_destination': isFinalDestination ? 1 : 0,
       });
-      _locations.add(LocationModel(
-        id:                 locId,
-        name:               name,
-        type:               type,
-        isFinalDestination: isFinalDestination,
-        createdAt:          now,
-        updatedAt:          now,
-      ));
-      SyncService.instance.markMasterDirty();
+      final newLoc = LocationModel(id: locId, name: name, type: type, isFinalDestination: isFinalDestination, createdAt: now, updatedAt: now);
+    _locations.add(newLoc);
+    _locationMap[locId] = newLoc;
+    SyncService.instance.markMasterDirty();
       _notify();
     } catch (e) { debugPrint('addLocation error: $e'); }
   }
@@ -772,16 +785,15 @@ class AppDataProvider extends ChangeNotifier {
       await DatabaseHelper.instance.softDeleteLocation(id);
       final loc = _locations.firstWhere((l) => l.id == id);
       loc.isDeleted = true; loc.updatedAt = now;
+       _locationMap.remove(id);
       SyncService.instance.markMasterDirty();
       _invalidateCaches();
       _notify();
     } catch (e) { debugPrint('deleteLocation($id): $e'); }
   }
 
-  LocationModel? getLocationById(String id) {
-    try { return _locations.firstWhere((l) => l.id == id); } catch (_) { return null; }
-  }
-
+   LocationModel? getLocationById(String id) => _locationMap[id];
+StaffModel? staffById(String id) => _staffMap[id];
   // ═══════════════════════════════════════════════════════════════════════════
   // STAFF
   // ═══════════════════════════════════════════════════════════════════════════
@@ -801,8 +813,10 @@ class AppDataProvider extends ChangeNotifier {
         'role':       role,
         'created_at': now.toIso8601String(),
       });
-      _staff.add(StaffModel(id: staffId, name: name, pin: pin, role: role, createdAt: now));
-      SyncService.instance.markMasterDirty();
+      final newStaff = StaffModel(id: staffId, name: name, pin: pin, role: role, createdAt: now);
+    _staff.add(newStaff);
+    _staffMap[staffId] = newStaff;
+    SyncService.instance.markMasterDirty();
       _notify();
     } catch (e) { debugPrint('addStaff error: $e'); }
   }
@@ -832,6 +846,7 @@ class AppDataProvider extends ChangeNotifier {
     try {
       await DatabaseHelper.instance.deleteStaff(id);
       _staff.removeWhere((s) => s.id == id);
+      _staffMap.remove(id);
       if (_currentStaff?.id == id) _currentStaff = null;
       _notify(); // update UI immediately — local delete is done
 

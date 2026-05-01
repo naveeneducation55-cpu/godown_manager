@@ -321,6 +321,30 @@ class _HistoryScreenState extends State<HistoryScreen> {
   String      _search     = '';
   _DateFilter _dateFilter = _DateFilter.all;
   final _searchCtrl = TextEditingController();
+
+  // Cached filter+group result — recomputed only when inputs change
+  List<MovementModel>?                                    _cachedFiltered;
+  List<MapEntry<String, List<List<MovementModel>>>>?      _cachedGrouped;
+  int    _lastMovementCount = -1;
+  String _lastSearch        = '';
+  _DateFilter _lastFilter   = _DateFilter.all;
+
+  List<MapEntry<String, List<List<MovementModel>>>> _getGrouped(AppDataProvider data) {
+    final count = data.sortedMovements.length;
+    if (_cachedGrouped != null &&
+        count       == _lastMovementCount &&
+        _search     == _lastSearch &&
+        _dateFilter == _lastFilter) {
+      return _cachedGrouped!;
+    }
+    _cachedFiltered    = _filter(data);
+    _cachedGrouped     = _group(_cachedFiltered!);
+    _lastMovementCount = count;
+    _lastSearch        = _search;
+    _lastFilter        = _dateFilter;
+    return _cachedGrouped!;
+  }
+
   @override
   void dispose() {
     _searchCtrl.dispose();
@@ -343,18 +367,15 @@ class _HistoryScreenState extends State<HistoryScreen> {
           m.createdAt.isBefore(weekStart)) return false;
 
       // Search filter
+      
       if (_search.isNotEmpty) {
         final q    = _search.toLowerCase();
         final item = data.getItemById(m.itemId);
         final from = data.getLocationById(m.fromLocationId);
         final to   = data.getLocationById(m.toLocationId);
-        final stf  = data.staff.firstWhere(
-          (s) => s.id == m.staffId,
-          orElse: () => StaffModel(
-              id: '', name: '', pin: '', createdAt: DateTime.now()),
-        );
+         final stf = data.staffById(m.staffId); 
         return (item?.name.toLowerCase().contains(q) ?? false) ||
-               stf.name.toLowerCase().contains(q) ||
+               (data.staffById(m.staffId)?.name.toLowerCase().contains(q) ?? false) ||
                (from?.name.toLowerCase().contains(q) ?? false) ||
                (to?.name.toLowerCase().contains(q) ?? false);
       }
@@ -413,8 +434,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Widget build(BuildContext context) {
     final t        = context.appTheme;
     final data     = context.watch<AppDataProvider>();
-    final filtered = _filter(data);
-    final grouped  = _group(filtered); // now List<MapEntry<String, List<List<MovementModel>>>>
+    final grouped  = _getGrouped(data); // now List<MapEntry<String, List<List<MovementModel>>>>
     // Total transaction count for header badge
     final txnCount = grouped.fold<int>(0, (sum, e) => sum + e.value.length);
 
@@ -515,50 +535,56 @@ class _HistoryScreenState extends State<HistoryScreen> {
                           ? 'No records match "$_search"'
                           : 'No movements recorded yet.',
                     )
-                  : ListView.builder(
-                      padding: AppSizes.pagePadding(context)
-                          .copyWith(top: 4, bottom: AppSpacing.lg),
-                      itemCount: grouped.length,
-                      itemBuilder: (_, i) {
-                        final label = grouped[i].key;
-                        final txns  = grouped[i].value; // List<List<MovementModel>>
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.only(
-                                  top: 16, bottom: 8),
-                              child: Row(children: [
-                                Text(label.toUpperCase(),
-                                    style: AppFonts.labelStyle(
-                                        color: t.text3)),
-                                const SizedBox(width: 8),
-                                Expanded(child: Container(
-                                    height: 0.5, color: t.border)),
-                                const SizedBox(width: 8),
-                                Text('${txns.length}',
-                                    style: AppFonts.monoStyle(
-                                        size: 10, color: t.text3)),
-                              ]),
-                            ),
-                            // Transaction rows — one card per groupId
-                            ...txns.asMap().entries.map((e) =>
-                              _TxnRow(
-                                movements: e.value,
-                                data:      data,
-                                isLast:    e.key == txns.length - 1,
-                              ),
-                            ),
-                          ],
-                        );
-                      },
-                    ),
+                  : _buildFlatList(context, grouped, data, t),
             ),
           ],
         ),
       ),
     );
   }
+
+  Widget _buildFlatList(
+  BuildContext context,
+  List<MapEntry<String, List<List<MovementModel>>>> grouped,
+  AppDataProvider data,
+  AppThemeExtension t,
+) {
+  // Flatten: [header, txn, txn, header, txn, ...] as a single item list
+  final items = <Object>[];
+  for (final group in grouped) {
+    items.add(group.key);              // String = date header
+    items.addAll(group.value);         // List<MovementModel> = txn row
+  }
+
+  return ListView.builder(
+    padding: AppSizes.pagePadding(context).copyWith(top: 4, bottom: AppSpacing.lg),
+    itemCount: items.length,
+    itemBuilder: (_, i) {
+      final item = items[i];
+      if (item is String) {
+        // Date header
+        final txnCount = grouped
+            .firstWhere((e) => e.key == item).value.length;
+        return Padding(
+          padding: const EdgeInsets.only(top: 16, bottom: 8),
+          child: Row(children: [
+            Text(item.toUpperCase(),
+                style: AppFonts.labelStyle(color: t.text3)),
+            const SizedBox(width: 8),
+            Expanded(child: Container(height: 0.5, color: t.border)),
+            const SizedBox(width: 8),
+            Text('$txnCount',
+                style: AppFonts.monoStyle(size: 10, color: t.text3)),
+          ]),
+        );
+      }
+      final txn  = item as List<MovementModel>;
+      final isLast = i == items.length - 1 || items[i + 1] is String;
+      return _TxnRow(movements: txn, data: data, isLast: isLast);
+    },
+  );
+}
+
 }
 
 // ─── Single log row ───────────────────────────────────────────────────────────
