@@ -494,15 +494,7 @@ final Map<String, ItemModel>     _itemMap     = {};
   }
 
   Future<void> _seedAndLoad(DatabaseHelper db) async {
-    await db.seedData();
-    final seedResults = await Future.wait([
-      db.getItems(), db.getLocations(), db.getStaff(),
-    ]);
-    _items    ..clear()..addAll(_safeParseItems(seedResults[0]));
-    _locations..clear()..addAll(_safeParseLocations(seedResults[1]));
-    _staff    ..clear()..addAll(_safeParseStaff(seedResults[2]));
-    debugPrint('AppDataProvider: seed done — staff:${_staff.length}');
-    SyncService.instance.markMasterDirty();
+    debugPrint('AppDataProvider: new shop — empty DB, ready for onboarding');
   }
 
   Future<void> _reloadAfterFirstSync(DatabaseHelper db, {required int attempt}) async {
