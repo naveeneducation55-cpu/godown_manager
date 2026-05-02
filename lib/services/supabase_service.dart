@@ -1,5 +1,14 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// supabase_service.dart  — Checkpoint 2 (Supabase free tier optimised)
+// supabase_service.dart  — Phase 2 (v2.7.0)
+//
+// Phase 2 changes:
+//   • _shopId field + setShopId() — single injection point
+//   • isReachable() pings app_config — no RLS needed, always works
+//   • subscribeToAll() — all 5 table subscriptions filtered by shop_id
+//   • pullMovementsSince() — filtered by shop_id
+//   • pullMasterDataSince() — all 3 tables filtered by shop_id
+//   • pullAllData() — all 4 tables filtered by shop_id
+//   • Debug prints added at all critical points
 //
 // All Supabase API calls live here. Nothing else touches Supabase directly.
 //
@@ -67,9 +76,10 @@ class SupabaseService {
     if (!AppConfig.isSyncEnabled) return false;
     try {
       // head: true returns only count, no rows — cheapest possible query
+      // app_config has no RLS — always readable, zero row scan needed
       await _client
-          .from('staff')
-          .select('staff_id')
+          .from('app_config')
+          .select('key')
           .limit(1)
           .timeout(const Duration(seconds: 4));
       return true;
@@ -91,7 +101,21 @@ class SupabaseService {
   bool _isSubscribed = false;
   Timer? _heartbeatTimer;
 
-   void subscribeToAll({
+  // ── Single source of truth for shop isolation ──────────────────────────────
+  // Set ONCE via setShopId() called from AppDataProvider.initialize()
+  // All queries use _shopId internally — never passed as parameter
+  String _shopId = '';
+
+  void setShopId(String id) {
+    if (id.isEmpty) {
+      debugPrint('SupabaseService.setShopId: WARNING — empty id ignored');
+      return;
+    }
+    _shopId = id;
+    debugPrint('SupabaseService: shopId set → $id');
+  }
+
+  void subscribeToAll({
     required void Function(Map<String, dynamic> row) onMovementInsert,
     required void Function(Map<String, dynamic> row) onMovementUpdate,
     required void Function() onMasterDataChanged,
@@ -103,55 +127,60 @@ class SupabaseService {
     _onPullMissed  = onPullMissed;
     _channel?.unsubscribe();
 
-    final channelName = 'changes_${DateTime.now().millisecondsSinceEpoch}';
-    debugPrint('SupabaseService: subscribing channel $channelName');
+    // Channel name includes shopId — easier to debug in Supabase dashboard
+    final channelName = 'changes_${_shopId}_${DateTime.now().millisecondsSinceEpoch}';
+    debugPrint('SupabaseService: subscribing channel $channelName shopId=$_shopId');
     _channel = _client
         .channel(channelName)
-        // Movements — INSERT + UPDATE
+        // Movements — filtered by shop_id — CRITICAL for multi-tenancy
         .onPostgresChanges(
-          event:  PostgresChangeEvent.insert,
-          schema: 'public',
-          table:  'movements',
+          event:   PostgresChangeEvent.insert,
+          schema:  'public',
+          table:   'movements',
+          filter:  PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'shop_id', value: _shopId),
           callback: (payload) {
-            debugPrint('Realtime: movement INSERT');
+            debugPrint('Realtime: movement INSERT shop=$_shopId');
             onMovementInsert(Map<String, dynamic>.from(payload.newRecord));
           },
         )
         .onPostgresChanges(
-          event:  PostgresChangeEvent.update,
-          schema: 'public',
-          table:  'movements',
+          event:   PostgresChangeEvent.update,
+          schema:  'public',
+          table:   'movements',
+          filter:  PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'shop_id', value: _shopId),
           callback: (payload) {
-            debugPrint('Realtime: movement UPDATE');
+            debugPrint('Realtime: movement UPDATE shop=$_shopId');
             onMovementUpdate(Map<String, dynamic>.from(payload.newRecord));
           },
         )
-
-        // Master data — any change
+        // Master data — filtered by shop_id
         .onPostgresChanges(
-          event:  PostgresChangeEvent.all,
-          schema: 'public',
-          table:  'items',
+          event:   PostgresChangeEvent.all,
+          schema:  'public',
+          table:   'items',
+          filter:  PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'shop_id', value: _shopId),
           callback: (_) {
-            debugPrint('Realtime: items changed');
+            debugPrint('Realtime: items changed shop=$_shopId');
             onMasterDataChanged();
           },
         )
         .onPostgresChanges(
-          event:  PostgresChangeEvent.all,
-          schema: 'public',
-          table:  'locations',
+          event:   PostgresChangeEvent.all,
+          schema:  'public',
+          table:   'locations',
+          filter:  PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'shop_id', value: _shopId),
           callback: (_) {
-            debugPrint('Realtime: locations changed');
+            debugPrint('Realtime: locations changed shop=$_shopId');
             onMasterDataChanged();
           },
         )
         .onPostgresChanges(
-          event:  PostgresChangeEvent.all,
-          schema: 'public',
-          table:  'staff',
+          event:   PostgresChangeEvent.all,
+          schema:  'public',
+          table:   'staff',
+          filter:  PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'shop_id', value: _shopId),
           callback: (_) {
-            debugPrint('Realtime: staff changed');
+            debugPrint('Realtime: staff changed shop=$_shopId');
             onMasterDataChanged();
           },
         )
@@ -231,15 +260,19 @@ bool get isChannelHealthy => _isSubscribed && _channel != null;  // ← here
   Future<SyncResult<List<Map<String,dynamic>>>> pullMovementsSince(
     DateTime since,
   ) async {
+    debugPrint('SupabaseService.pullMovementsSince: shopId=$_shopId since=$since');
     try {
       final data = await _client
           .from('movements')
           .select()
+          .eq('shop_id', _shopId)
           .gte('updated_at', since.toIso8601String())
           .order('updated_at')
           .timeout(const Duration(seconds: 8));
+      debugPrint('SupabaseService.pullMovementsSince: count=${data.length}');
       return SyncResult.ok(List<Map<String,dynamic>>.from(data));
     } catch (e) {
+      debugPrint('SupabaseService.pullMovementsSince error: $e');
       return SyncResult.err('pullMovementsSince: $e');
     }
   }
@@ -250,19 +283,22 @@ bool get isChannelHealthy => _isSubscribed && _channel != null;  // ← here
   Future<SyncResult<Map<String, List<Map<String,dynamic>>>>> pullMasterDataSince(
     DateTime since,
   ) async {
+    debugPrint('SupabaseService.pullMasterDataSince: shopId=$_shopId since=$since');
     try {
       final sinceStr = since.toIso8601String();
       final results  = await Future.wait([
-        _client.from('items')    .select().gte('updated_at', sinceStr).timeout(const Duration(seconds: 8)),
-        _client.from('locations').select().gte('updated_at', sinceStr).timeout(const Duration(seconds: 10)),
-       _client.from('staff').select().timeout(const Duration(seconds: 12)),
+        _client.from('items')    .select().eq('shop_id', _shopId).gte('updated_at', sinceStr).timeout(const Duration(seconds: 8)),
+        _client.from('locations').select().eq('shop_id', _shopId).gte('updated_at', sinceStr).timeout(const Duration(seconds: 10)),
+        _client.from('staff')    .select().eq('shop_id', _shopId).timeout(const Duration(seconds: 12)),
       ]);
+      debugPrint('SupabaseService.pullMasterDataSince: items=${results[0].length} locations=${results[1].length} staff=${results[2].length}');
       return SyncResult.ok({
         'items':     List<Map<String,dynamic>>.from(results[0]),
         'locations': List<Map<String,dynamic>>.from(results[1]),
         'staff':     List<Map<String,dynamic>>.from(results[2]),
       });
     } catch (e) {
+      debugPrint('SupabaseService.pullMasterDataSince error: $e');
       return SyncResult.err('pullMasterDataSince: $e');
     }
   }
@@ -272,13 +308,19 @@ bool get isChannelHealthy => _isSubscribed && _channel != null;  // ← here
   // If Supabase has data → use it. If empty → fall through to local seed.
   // Single call, 3 parallel queries — minimal Supabase usage.
   Future<SyncResult<Map<String, List<Map<String,dynamic>>>>> pullAllData() async {
+    debugPrint('SupabaseService.pullAllData: shopId=$_shopId');
+    if (_shopId.isEmpty) {
+      debugPrint('SupabaseService.pullAllData: ERROR — shopId empty, aborting pull');
+      return SyncResult.err('pullAllData: shopId not set');
+    }
     try {
       final results = await Future.wait([
-        _client.from('items')    .select().timeout(const Duration(seconds: 8)),
-        _client.from('locations').select().timeout(const Duration(seconds: 8)),
-        _client.from('staff')    .select().timeout(const Duration(seconds: 8)),
-        _client.from('movements').select().timeout(const Duration(seconds: 12)),
+        _client.from('items')    .select().eq('shop_id', _shopId).timeout(const Duration(seconds: 8)),
+        _client.from('locations').select().eq('shop_id', _shopId).timeout(const Duration(seconds: 8)),
+        _client.from('staff')    .select().eq('shop_id', _shopId).timeout(const Duration(seconds: 8)),
+        _client.from('movements').select().eq('shop_id', _shopId).timeout(const Duration(seconds: 12)),
       ]);
+      debugPrint('SupabaseService.pullAllData: items=${results[0].length} locations=${results[1].length} staff=${results[2].length} movements=${results[3].length}');
       return SyncResult.ok({
         'items':     List<Map<String,dynamic>>.from(results[0]),
         'locations': List<Map<String,dynamic>>.from(results[1]),
@@ -286,6 +328,7 @@ bool get isChannelHealthy => _isSubscribed && _channel != null;  // ← here
         'movements': List<Map<String,dynamic>>.from(results[3]),
       });
     } catch (e) {
+      debugPrint('SupabaseService.pullAllData error: $e');
       return SyncResult.err('pullAllData: $e');
     }
   }

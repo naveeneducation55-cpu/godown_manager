@@ -1,10 +1,17 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// database_helper.dart — Checkpoint 3
+// database_helper.dart — Phase 2 (v2.7.0)
 //
-// Checkpoint 3 change (THE fix for duplicate/hardcoded data):
-//   • _seedData() call REMOVED from _onCreate()
-//   • seedData() renamed public — called by AppDataProvider._seedAndLoad()
-//     only when Supabase is confirmed empty (first device ever)
+// Phase 2 changes:
+//   • _shopId field + setShopId() added — single injection point
+//   • DB version bumped to 7 — shop_id TEXT NOT NULL on all 4 tables
+//   • _onCreate: shop_id column + 4 shop_id indexes added
+//   • _onUpgrade: v3 block moved to correct position, v7 migration added
+//   • All read queries filter by _shopId internally — no param passing
+//   • All upsertFromRemote + batchUpsertMasterFromRemote include shop_id
+//   • upsertMovementFromRemote insert includes shop_id
+//   • getStock filters by _shopId, LEFT JOIN excludes deleted movements
+//   • seedData() kept — called only when Supabase is confirmed empty
+//   • Debug prints added at key points for traceability
 // ─────────────────────────────────────────────────────────────────────────────
 
 import 'package:sqflite/sqflite.dart';
@@ -18,8 +25,22 @@ class DatabaseHelper {
 
   static Database? _db;
 
+  // ── Single source of truth for shop isolation ──────────────────────────────
+  // Set ONCE via setShopId() in AppDataProvider.initialize()
+  // All read queries use _shopId internally — never passed as param
+  String _shopId = '';
+
+  void setShopId(String id) {
+    if (id.isEmpty) {
+      debugPrint('DatabaseHelper.setShopId: WARNING — empty id ignored');
+      return;
+    }
+    _shopId = id;
+    debugPrint('DatabaseHelper: shopId set → $id');
+  }
+
   static const _dbName = 'godown_inventory.db';
-  static const _dbVersion = 6;
+  static const _dbVersion = 7;
 
   static const tItems     = 'items';
   static const tLocations = 'locations';
@@ -49,19 +70,21 @@ class DatabaseHelper {
             unit        TEXT    NOT NULL,
             created_at  TEXT    NOT NULL,
             updated_at  TEXT    NOT NULL,
-            is_deleted  INTEGER NOT NULL DEFAULT 0
+            is_deleted  INTEGER NOT NULL DEFAULT 0,
+            shop_id     TEXT    NOT NULL DEFAULT ''
           )
         ''');
 
       await txn.execute('''
           CREATE TABLE $tLocations (
-            location_id   TEXT    PRIMARY KEY,
-            location_name TEXT    NOT NULL,
-            type          TEXT    NOT NULL CHECK(type IN ('godown','shop')),
-            created_at    TEXT    NOT NULL,
-            updated_at    TEXT    NOT NULL,
-            is_deleted    INTEGER NOT NULL DEFAULT 0,
-             is_final_destination INTEGER NOT NULL DEFAULT 0
+            location_id          TEXT    PRIMARY KEY,
+            location_name        TEXT    NOT NULL,
+            type                 TEXT    NOT NULL CHECK(type IN ('godown','shop')),
+            created_at           TEXT    NOT NULL,
+            updated_at           TEXT    NOT NULL,
+            is_deleted           INTEGER NOT NULL DEFAULT 0,
+            is_final_destination INTEGER NOT NULL DEFAULT 0,
+            shop_id              TEXT    NOT NULL DEFAULT ''
           )
         ''');
 
@@ -72,7 +95,8 @@ class DatabaseHelper {
             pin         TEXT    NOT NULL,
             role        TEXT    NOT NULL DEFAULT 'staff'
                                 CHECK(role IN ('admin','staff')),
-            created_at  TEXT    NOT NULL
+            created_at  TEXT    NOT NULL,
+            shop_id     TEXT    NOT NULL DEFAULT ''
           )
         ''');
 
@@ -93,7 +117,8 @@ class DatabaseHelper {
             remark          TEXT,
             bale_no         TEXT,
             is_deleted      INTEGER NOT NULL DEFAULT 0,
-            group_id        TEXT
+            group_id        TEXT,
+            shop_id         TEXT    NOT NULL DEFAULT ''
           )
         ''');
 
@@ -106,6 +131,15 @@ class DatabaseHelper {
           'CREATE INDEX idx_movements_to ON $tMovements(to_location)');
       await txn.execute(
           'CREATE INDEX idx_movements_created ON $tMovements(created_at)');
+      // shop_id indexes — critical for multi-tenant query performance
+      await txn.execute(
+          'CREATE INDEX idx_items_shop     ON $tItems(shop_id)');
+      await txn.execute(
+          'CREATE INDEX idx_locations_shop ON $tLocations(shop_id)');
+      await txn.execute(
+          'CREATE INDEX idx_staff_shop     ON $tStaff(shop_id)');
+      await txn.execute(
+          'CREATE INDEX idx_movements_shop ON $tMovements(shop_id)');
       await txn.execute('''
           CREATE TABLE $tSettings (
             key    TEXT PRIMARY KEY,
@@ -114,38 +148,18 @@ class DatabaseHelper {
         ''');
     });
 
-    debugPrint('DatabaseHelper: tables created — empty, no seed');
+    debugPrint('DatabaseHelper: tables created v7 — shop_id on all tables');
   }
 
   
-   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
-      if (oldVersion < 2) {
-        await db.execute(   
-          'ALTER TABLE $tMovements ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0',
-        );
-        debugPrint('DatabaseHelper: migrated v1→v2 — is_deleted added to movements');
-      }
-      if (oldVersion < 4) {
-        await db.execute(
-          'ALTER TABLE $tMovements ADD COLUMN bale_no TEXT',
-        );
-        debugPrint('DatabaseHelper: migrated v3→v4 — bale_no added to movements');
-      }
-      if (oldVersion < 5) {
-        await db.execute(
-          'ALTER TABLE $tLocations ADD COLUMN is_final_destination INTEGER NOT NULL DEFAULT 0',
-        );
-        debugPrint('DatabaseHelper: migrated v4→v5 — is_final_destination added to locations');
-      }
-      if (oldVersion < 6) {
-        await db.execute(
-          'ALTER TABLE $tMovements ADD COLUMN group_id TEXT',
-        );
-        await db.execute(
-          'UPDATE $tMovements SET group_id = movement_id WHERE group_id IS NULL',
-        );
-        debugPrint('DatabaseHelper: migrated v5→v6 — group_id added to movements');
-      }
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    debugPrint('DatabaseHelper: upgrading v$oldVersion → v$newVersion');
+    if (oldVersion < 2) {
+      await db.execute(
+        'ALTER TABLE $tMovements ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0',
+      );
+      debugPrint('DatabaseHelper: migrated v1→v2');
+    }
     if (oldVersion < 3) {
       await db.execute('''
           CREATE TABLE IF NOT EXISTS $tSettings (
@@ -153,7 +167,36 @@ class DatabaseHelper {
             value  TEXT
           )
         ''');
-      debugPrint('DatabaseHelper: migrated v2→v3 — app_settings table created');
+      debugPrint('DatabaseHelper: migrated v2→v3 — app_settings created');
+    }
+    if (oldVersion < 4) {
+      await db.execute('ALTER TABLE $tMovements ADD COLUMN bale_no TEXT');
+      debugPrint('DatabaseHelper: migrated v3→v4 — bale_no added');
+    }
+    if (oldVersion < 5) {
+      await db.execute(
+        'ALTER TABLE $tLocations ADD COLUMN is_final_destination INTEGER NOT NULL DEFAULT 0',
+      );
+      debugPrint('DatabaseHelper: migrated v4→v5 — is_final_destination added');
+    }
+    if (oldVersion < 6) {
+      await db.execute('ALTER TABLE $tMovements ADD COLUMN group_id TEXT');
+      await db.execute(
+        'UPDATE $tMovements SET group_id = movement_id WHERE group_id IS NULL',
+      );
+      debugPrint('DatabaseHelper: migrated v5→v6 — group_id added');
+    }
+    if (oldVersion < 7) {
+      // Empty string default — setShopId() will populate on next sync
+      await db.execute("ALTER TABLE $tItems     ADD COLUMN shop_id TEXT NOT NULL DEFAULT ''");
+      await db.execute("ALTER TABLE $tLocations ADD COLUMN shop_id TEXT NOT NULL DEFAULT ''");
+      await db.execute("ALTER TABLE $tStaff     ADD COLUMN shop_id TEXT NOT NULL DEFAULT ''");
+      await db.execute("ALTER TABLE $tMovements ADD COLUMN shop_id TEXT NOT NULL DEFAULT ''");
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_items_shop     ON $tItems(shop_id)');
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_locations_shop ON $tLocations(shop_id)');
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_staff_shop     ON $tStaff(shop_id)');
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_movements_shop ON $tMovements(shop_id)');
+      debugPrint('DatabaseHelper: migrated v6→v7 — shop_id added to all tables');
     }
   }
 
@@ -274,14 +317,20 @@ class DatabaseHelper {
   // ═══════════════════════════════════════════════════════════════════════════
 
   Future<List<Map<String, dynamic>>> getItems() async {
+    debugPrint('DatabaseHelper.getItems: shopId=$_shopId');
     final d = await db;
     return d.query(tItems,
-        where: 'is_deleted = ?', whereArgs: [0], orderBy: 'item_name ASC');
+        where:     'is_deleted = ? AND shop_id = ?',
+        whereArgs: [0, _shopId],
+        orderBy:   'item_name ASC');
   }
 
   Future<List<Map<String, dynamic>>> getAllItems() async {
     final d = await db;
-    return d.query(tItems, orderBy: 'item_name ASC');
+    return d.query(tItems,
+        where:     'shop_id = ?',
+        whereArgs: [_shopId],
+        orderBy:   'item_name ASC');
   }
 
   Future<String> insertItem(Map<String, dynamic> data) async {
@@ -300,10 +349,8 @@ class DatabaseHelper {
           'unit': remote['unit']?.toString(),
           'created_at': remote['created_at']?.toString(),
           'updated_at': remote['updated_at']?.toString(),
-          'is_deleted':
-              (remote['is_deleted'] == true || remote['is_deleted'] == 1)
-                  ? 1
-                  : 0,
+          'is_deleted': (remote['is_deleted'] == true || remote['is_deleted'] == 1) ? 1 : 0,
+          'shop_id':    remote['shop_id']?.toString() ?? '',
         },
         conflictAlgorithm: ConflictAlgorithm.replace);
   }
@@ -325,14 +372,20 @@ class DatabaseHelper {
   // ═══════════════════════════════════════════════════════════════════════════
 
   Future<List<Map<String, dynamic>>> getLocations() async {
+    debugPrint('DatabaseHelper.getLocations: shopId=$_shopId');
     final d = await db;
     return d.query(tLocations,
-        where: 'is_deleted = ?', whereArgs: [0], orderBy: 'location_name ASC');
+        where:     'is_deleted = ? AND shop_id = ?',
+        whereArgs: [0, _shopId],
+        orderBy:   'location_name ASC');
   }
 
   Future<List<Map<String, dynamic>>> getAllLocations() async {
     final d = await db;
-    return d.query(tLocations, orderBy: 'location_name ASC');
+    return d.query(tLocations,
+        where:     'shop_id = ?',
+        whereArgs: [_shopId],
+        orderBy:   'location_name ASC');
   }
 
   Future<String> insertLocation(Map<String, dynamic> data) async {
@@ -355,10 +408,8 @@ class DatabaseHelper {
               (remote['is_deleted'] == true || remote['is_deleted'] == 1)
                   ? 1
                   : 0,
-          'is_final_destination':
-              (remote['is_final_destination'] == true || remote['is_final_destination'] == 1)
-                  ? 1
-                  : 0,
+          'is_final_destination': (remote['is_final_destination'] == true || remote['is_final_destination'] == 1) ? 1 : 0,
+          'shop_id':    remote['shop_id']?.toString() ?? '',
         },
         conflictAlgorithm: ConflictAlgorithm.replace);
   }
@@ -380,8 +431,12 @@ class DatabaseHelper {
   // ═══════════════════════════════════════════════════════════════════════════
 
   Future<List<Map<String, dynamic>>> getStaff() async {
+    debugPrint('DatabaseHelper.getStaff: shopId=$_shopId');
     final d = await db;
-    return d.query(tStaff, orderBy: 'staff_name ASC');
+    return d.query(tStaff,
+        where:     'shop_id = ?',
+        whereArgs: [_shopId],
+        orderBy:   'staff_name ASC');
   }
 
   Future<String> insertStaff(Map<String, dynamic> data) async {
@@ -398,8 +453,9 @@ class DatabaseHelper {
           'staff_id': remote['staff_id']?.toString(),
           'staff_name': remote['staff_name']?.toString(),
           'pin': remote['pin']?.toString(),
-          'role': remote['role']?.toString() ?? 'staff',
+          'role':       remote['role']?.toString() ?? 'staff',
           'created_at': remote['created_at']?.toString(),
+          'shop_id':    remote['shop_id']?.toString() ?? '',
         },
         conflictAlgorithm: ConflictAlgorithm.replace);
   }
@@ -420,10 +476,11 @@ class DatabaseHelper {
 
   Future<List<Map<String, dynamic>>> getMovements(
       {int limit = 200, int offset = 0}) async {
+    debugPrint('DatabaseHelper.getMovements: shopId=$_shopId limit=$limit');
     final d = await db;
     return d.query(tMovements,
-        where:     'is_deleted = ?',
-        whereArgs: [0],
+        where:     'is_deleted = ? AND shop_id = ?',
+        whereArgs: [0, _shopId],
         orderBy:   'created_at DESC',
         limit:     limit,
         offset:    offset);
@@ -475,17 +532,18 @@ class DatabaseHelper {
   Future<List<Map<String, dynamic>>> getPendingMovements() async {
     final d = await db;
     return d.query(tMovements,
-        where:     'sync_status = ? AND is_deleted = ?',
-        whereArgs: ['pending', 0],
+        where:     'sync_status = ? AND is_deleted = ? AND shop_id = ?',
+        whereArgs: ['pending', 0, _shopId],
         orderBy:   'created_at ASC');
   }
 
   // Includes soft-deleted pending — needed for sync push so deletions reach Supabase
   Future<List<Map<String, dynamic>>> getPendingMovementsAll() async {
+    debugPrint('DatabaseHelper.getPendingMovementsAll: shopId=$_shopId');
     final d = await db;
     return d.query(tMovements,
-        where:     'sync_status = ?',
-        whereArgs: ['pending'],
+        where:     'sync_status = ? AND shop_id = ?',
+        whereArgs: ['pending', _shopId],
         orderBy:   'created_at ASC');
   }
 
@@ -500,12 +558,12 @@ class DatabaseHelper {
     }, where: 'movement_id = ?', whereArgs: [id]);
   }
 
-Future<List<Map<String, dynamic>>> getMovementsByGroupId(String groupId) async {
-  final d = await db;
-  return d.query(tMovements,
-      where:     'group_id = ? AND is_deleted = ?',
-      whereArgs: [groupId, 0]);
-}
+  Future<List<Map<String, dynamic>>> getMovementsByGroupId(String groupId) async {
+    final d = await db;
+    return d.query(tMovements,
+        where:     'group_id = ? AND is_deleted = ? AND shop_id = ?',
+        whereArgs: [groupId, 0, _shopId]);
+  }
 
 
 Future<void> batchUpsertMasterFromRemote({
@@ -523,6 +581,7 @@ Future<void> batchUpsertMasterFromRemote({
         'created_at': row['created_at']?.toString(),
         'updated_at': row['updated_at']?.toString(),
         'is_deleted': (row['is_deleted'] == true || row['is_deleted'] == 1) ? 1 : 0,
+        'shop_id':    row['shop_id']?.toString() ?? '',
       }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
     for (final row in locations) {
@@ -534,6 +593,7 @@ Future<void> batchUpsertMasterFromRemote({
           'updated_at':          row['updated_at']?.toString(),
           'is_deleted':          (row['is_deleted'] == true || row['is_deleted'] == 1) ? 1 : 0,
           'is_final_destination': (row['is_final_destination'] == true || row['is_final_destination'] == 1) ? 1 : 0,
+          'shop_id':    row['shop_id']?.toString() ?? '',
         }, conflictAlgorithm: ConflictAlgorithm.replace);
       }
     for (final row in staff) {
@@ -543,6 +603,7 @@ Future<void> batchUpsertMasterFromRemote({
         'pin':        row['pin']?.toString(),
         'role':       row['role']?.toString() ?? 'staff',
         'created_at': row['created_at']?.toString(),
+        'shop_id':    row['shop_id']?.toString() ?? '',
       }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
   });
@@ -573,7 +634,9 @@ Future<bool> upsertMovementFromRemote(Map<String, dynamic> remote) async {
           'bale_no':       remote['bale_no'],
           'is_deleted':    (remote['is_deleted'] == true || remote['is_deleted'] == 1) ? 1 : 0,
           'group_id':      remote['group_id']?.toString() ?? remote['movement_id']?.toString(),
+          'shop_id':       remote['shop_id']?.toString() ?? '',
         });
+      debugPrint('DatabaseHelper.upsertMovementFromRemote: inserted $remoteId');
       return true;
     } else {
       final localTs         = existing.first['updated_at'] as String;
@@ -628,6 +691,7 @@ Future<bool> upsertMovementFromRemote(Map<String, dynamic> remote) async {
   // ═══════════════════════════════════════════════════════════════════════════
 
   Future<List<Map<String, dynamic>>> getStock() async {
+    debugPrint('DatabaseHelper.getStock: shopId=$_shopId');
     final d = await db;
     return d.rawQuery('''
         SELECT
@@ -637,12 +701,13 @@ Future<bool> upsertMovementFromRemote(Map<String, dynamic> remote) async {
           COALESCE(SUM(CASE WHEN m.from_location = l.location_id AND m.from_location != 'SUPPLIER' THEN m.quantity ELSE 0 END), 0) AS outgoing
         FROM $tItems i
         CROSS JOIN $tLocations l
-        LEFT JOIN $tMovements m ON m.item_id = i.item_id
+        LEFT JOIN $tMovements m ON m.item_id = i.item_id AND m.is_deleted = 0
         WHERE i.is_deleted = 0 AND l.is_deleted = 0
+          AND i.shop_id = ? AND l.shop_id = ?
         GROUP BY i.item_id, l.location_id
         HAVING incoming > 0 OR outgoing > 0
         ORDER BY l.location_name, i.item_name
-      ''');
+      ''', [_shopId, _shopId]);
   }
 
 

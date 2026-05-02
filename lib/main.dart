@@ -24,9 +24,8 @@ void main() async {
   await SupabaseService.initialize();
 debugPrint('=== KEY: ${AppConfig.supabaseAnonKey.length} chars, enabled: ${AppConfig.isSyncEnabled}');
   final dataProvider = AppDataProvider();
-  // await dataProvider.initialize();
+ await dataProvider.initialize();
   dataProvider.startRealtimeSync();
-  dataProvider.initialize();
   runApp(
     MultiProvider(
       

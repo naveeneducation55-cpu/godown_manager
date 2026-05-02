@@ -1,5 +1,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// sync_service.dart — Checkpoint 4
+// sync_service.dart — Phase 2 (v2.7.0)
+//
+// Phase 2 changes:
+//   • shopId owned by SupabaseService + DatabaseHelper singletons
+//   • No _shopId field here — singletons handle isolation automatically
+//   • _serialiseMovements includes shop_id from SQLite row
+//   • _pushMasterData uses sequential awaits (typed) instead of Future.wait
 //
 // Architecture — fully event-driven, timer only as safety net:
 //
@@ -464,19 +470,19 @@ Future<void> _loadLastSyncAt() async {
       _lastMasterPush  = now;
       _masterDataDirty = false;
 
-      final db      = DatabaseHelper.instance;
-      final results = await Future.wait([
-        db.getAllItems(), db.getAllLocations(), db.getStaff(),
-      ]);
+      final db        = DatabaseHelper.instance;
+      final items     = await db.getAllItems();
+      final locations = await db.getAllLocations();
+      final staff     = await db.getStaff();
 
-      await SupabaseService.instance.pushItems(_serialiseMaster(results[0]));
-      await SupabaseService.instance.pushLocations(_serialiseMaster(results[1]));
-      await SupabaseService.instance.pushStaff(_serialiseMaster(results[2]));
+      await SupabaseService.instance.pushItems(_serialiseMaster(items));
+      await SupabaseService.instance.pushLocations(_serialiseMaster(locations));
+      await SupabaseService.instance.pushStaff(_serialiseMaster(staff));
 
       debugPrint('SyncService: master data pushed — '
-          'items:${results[0].length} '
-          'locations:${results[1].length} '
-          'staff:${results[2].length}');
+          'items:${items.length} '
+          'locations:${locations.length} '
+          'staff:${staff.length}');
     } catch (e) {
       _masterDataDirty = true; // retry next time
       debugPrint('SyncService._pushMasterData error: $e');
@@ -628,6 +634,7 @@ Future<void> _loadLastSyncAt() async {
         'bale_no':       m['bale_no'],
         'is_deleted':    m['is_deleted'] == 1,
         'group_id':      m['group_id'] ?? m['movement_id'],
+        'shop_id':       m['shop_id'],
       }).toList();
 
   static List<Map<String,dynamic>> _serialiseMaster(

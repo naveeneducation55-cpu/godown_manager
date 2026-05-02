@@ -232,6 +232,7 @@ final Map<String, ItemModel>     _itemMap     = {};
   StaffModel? _currentStaff;
   bool        _disposed  = false;
   bool        _isLoading = true;
+  String      _shopId    = '';
 
   // Retry state
   bool   _syncFailed    = false;
@@ -259,6 +260,7 @@ final Map<String, ItemModel>     _itemMap     = {};
   bool                get isAdmin        => _currentStaff?.isAdmin ?? false;
   bool                get isLoading      => _isLoading;
   int                 get totalMovements => _movements.length;
+  String              get shopId         => _shopId;
 
   bool   get syncFailed   => _syncFailed;
   int    get retryAttempt => _retryAttempt;
@@ -329,6 +331,11 @@ final Map<String, ItemModel>     _itemMap     = {};
     _retryAttempt = 0;
     _retryMessage = 'Loading data...';
     try {
+      final prefs = await SharedPreferences.getInstance();
+      _shopId = prefs.getString('current_shop_id') ?? 'SBT-SIL-0001';
+      debugPrint('AppDataProvider: shopId=$_shopId');
+      SupabaseService.instance.setShopId(_shopId);
+      DatabaseHelper.instance.setShopId(_shopId);
       await _loadAll();
     } catch (e, st) {
       debugPrint('AppDataProvider.initialize error: $e\n$st');
@@ -641,6 +648,7 @@ final Map<String, ItemModel>     _itemMap     = {};
         'created_at': now.toIso8601String(),
         'updated_at': now.toIso8601String(),
         'is_deleted': 0,
+        'shop_id':    _shopId,
       });
        final newItem = ItemModel(id: itemId, name: name, unit: unit, createdAt: now, updatedAt: now);
     _items.add(newItem);
@@ -663,6 +671,7 @@ final Map<String, ItemModel>     _itemMap     = {};
           'edited_by':     null,
           'sync_status':   'pending',
           'remark':        'Opening stock',
+          'shop_id':       _shopId,
         });
         _movements.insert(0, MovementModel(
           id:             mvtId,
@@ -739,6 +748,7 @@ final Map<String, ItemModel>     _itemMap     = {};
         'updated_at':          now.toIso8601String(),
         'is_deleted':          0,
         'is_final_destination': isFinalDestination ? 1 : 0,
+        'shop_id':             _shopId,
       });
       final newLoc = LocationModel(id: locId, name: name, type: type, isFinalDestination: isFinalDestination, createdAt: now, updatedAt: now);
     _locations.add(newLoc);
@@ -761,6 +771,7 @@ final Map<String, ItemModel>     _itemMap     = {};
         'type':                type,
         'updated_at':          now.toIso8601String(),
         'is_final_destination': isFinalDestination ? 1 : 0,
+        'shop_id':             _shopId,
       });
       final loc = _locations.firstWhere((l) => l.id == id);
       loc.name = name; loc.type = type;
@@ -804,6 +815,7 @@ StaffModel? staffById(String id) => _staffMap[id];
         'pin':        pin,
         'role':       role,
         'created_at': now.toIso8601String(),
+        'shop_id':    _shopId,
       });
       final newStaff = StaffModel(id: staffId, name: name, pin: pin, role: role, createdAt: now);
     _staff.add(newStaff);
@@ -914,7 +926,7 @@ StaffModel? staffById(String id) => _staffMap[id];
       'remark':        remark,
       'bale_no':       baleNo,
       'group_id':      groupId ?? mvtId,
-
+      'shop_id':       _shopId,
     });
     _movements.insert(0, MovementModel(
       id:             mvtId,
@@ -1012,6 +1024,7 @@ Future<bool> addMultiMovement({
         'remark':        remark,
         'bale_no':       baleNo,
         'group_id':      groupId,
+        'shop_id':       _shopId,
       });
       insertedModels.add(MovementModel(
         id:             mvtId,
@@ -1226,4 +1239,3 @@ Future<bool> addMultiMovement({
     } catch (e) { debugPrint('markAllSynced: $e'); }
   }
 }
-
