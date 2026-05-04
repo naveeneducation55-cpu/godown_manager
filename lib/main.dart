@@ -10,7 +10,12 @@ import 'screens/home/home_screen.dart';
 import 'services/supabase_service.dart';
 import 'config/app_config.dart';
 import 'services/sync_service.dart';
+import 'services/shop_service.dart';
+import 'services/remote_config_service.dart';
+import 'screens/onboarding/onboarding_screen.dart';
+import 'screens/onboarding/register_shop_screen.dart';
 
+const kAppVersion = '2.6.3';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -19,39 +24,107 @@ void main() async {
     DeviceOrientation.portraitDown,
   ]);
 
+  await SupabaseService.initialize();
+  debugPrint('=== KEY: ${AppConfig.supabaseAnonKey.length} chars, enabled: ${AppConfig.isSyncEnabled}');
+
+  // Remote config — non-blocking, offline-safe, 3s timeout
+  await RemoteConfigService.instance.fetch();
+
+  // Resolve startup route before building UI
+  final startRoute   = await _resolveStartRoute();
+  final dataProvider = AppDataProvider();
+
+  if (startRoute == _StartRoute.app) {
+    // Only initialize data for normal app flow
+    await dataProvider.initialize();
+    dataProvider.startRealtimeSync();
+  }
+
   final savedStaffId = await getSavedStaffId();
 
-  await SupabaseService.initialize();
-debugPrint('=== KEY: ${AppConfig.supabaseAnonKey.length} chars, enabled: ${AppConfig.isSyncEnabled}');
-  final dataProvider = AppDataProvider();
- await dataProvider.initialize();
-  dataProvider.startRealtimeSync();
   runApp(
     MultiProvider(
-      
       providers: [
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
         ChangeNotifierProvider<AppDataProvider>.value(value: dataProvider),
       ],
-      child: GodownApp(savedStaffId: savedStaffId),
+      child: GodownApp(
+        savedStaffId: savedStaffId,
+        startRoute:   startRoute,
+        dataProvider: dataProvider,
+      ),
     ),
   );
 }
 
+enum _StartRoute { app, onboarding, resumePin }
+
+Future<_StartRoute> _resolveStartRoute() async {
+  final shopId = await ShopService.instance.getSavedShopId();
+  if (shopId == null || shopId.isEmpty) {
+    debugPrint('main: no shop_id — onboarding');
+    return _StartRoute.onboarding;
+  }
+  final partial = await ShopService.instance.isPartialRegistration();
+  if (partial) {
+    debugPrint('main: partial registration — resume PIN');
+    return _StartRoute.resumePin;
+  }
+  debugPrint('main: onboarded shopId=$shopId');
+  return _StartRoute.app;
+}
+
 class GodownApp extends StatefulWidget {
-  final String? savedStaffId;
-  const GodownApp({super.key, this.savedStaffId});
+  final String?         savedStaffId;
+  final _StartRoute     startRoute;
+  final AppDataProvider dataProvider;
+  const GodownApp({
+    super.key,
+    this.savedStaffId,
+    required this.startRoute,
+    required this.dataProvider,
+  });
   @override
   State<GodownApp> createState() => _GodownAppState();
 }
 
 class _GodownAppState extends State<GodownApp> with WidgetsBindingObserver {
 
+Widget _resolveHome() {
+  switch (widget.startRoute) {
+      case _StartRoute.resumePin:
+        return const RegisterShopScreen(resumeFromPin: true);
+      case _StartRoute.onboarding:
+      case _StartRoute.app:
+        return Consumer<AppDataProvider>(
+        builder: (context, data, _) {
+          if (data.isLoading) {
+            return _SyncLoadingScreen(
+              message: data.retryMessage,
+              attempt: data.retryAttempt,
+              max:     data.maxRetries,
+            );
+          }
+          if (data.syncFailed) {
+            return _SyncErrorScreen(
+              onRetry: () async {
+                await data.retryInitialize();
+                if (!data.syncFailed) data.startRealtimeSync();
+              },
+            );
+          }
+          if (data.isLoggedIn) return const HomeScreen();
+          return const LoginScreen();
+        },
+      );
+  }
+}
+
   @override
   void initState() {
     super.initState();
       WidgetsBinding.instance.addObserver(this);
-    if (widget.savedStaffId != null) {
+   if (widget.startRoute == _StartRoute.app && widget.savedStaffId != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         final data   = context.read<AppDataProvider>();
@@ -73,7 +146,7 @@ class _GodownAppState extends State<GodownApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.resumed && widget.startRoute == _StartRoute.app) {
       debugPrint('App resumed — reconnecting realtime + push + pull');
       SyncService.instance.reconnectRealtime();
       SyncService.instance.pushNow();
@@ -111,26 +184,7 @@ class _GodownAppState extends State<GodownApp> with WidgetsBindingObserver {
       themeMode:                 themeProvider.mode,
       theme:                     lightTheme,
       darkTheme:                 darkTheme,
-      home: Consumer<AppDataProvider>(
-        builder: (context, data, _) {
-          if (data.isLoading) {
-            return _SyncLoadingScreen(
-              message: data.retryMessage,
-              attempt: data.retryAttempt,
-              max:     data.maxRetries,
-            );
-          }          if (data.syncFailed) {
-            return _SyncErrorScreen(
-              onRetry: () async {
-                await data.retryInitialize();
-                if (!data.syncFailed) data.startRealtimeSync();
-              },
-            );
-          }
-          if (data.isLoggedIn) return const HomeScreen();
-          return const LoginScreen();
-        },
-      ),
+      home: _resolveHome(),
       onGenerateRoute: (settings) => AppRouter.onGenerateRoute(settings),
       navigatorKey: GlobalKey<NavigatorState>(),
     );

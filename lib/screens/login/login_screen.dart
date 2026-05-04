@@ -281,6 +281,7 @@ class _LoginScreenState extends State<LoginScreen> {
   // PIN check is synchronous (in-memory)
   // SharedPreferences save is async — awaited before navigation
   Future<void> _verifyPin(String pin) async {
+    
     if (_selectedStaff == null || _isSaving) return;
 
     setState(() => _isSaving = true);
@@ -294,6 +295,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final success = data.login(staffId: _selectedStaff!.id, pin: pin);
 
     if (success) {
+      
       // Async: save to SharedPreferences — device is now this staff's device
       await saveStaffId(_selectedStaff!.id);
       if (!mounted) return;
