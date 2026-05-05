@@ -20,6 +20,9 @@ import '../../app_theme.dart';
 import '../../common_widgets.dart';
 import '../../providers/app_data_provider.dart';
 import '../../router.dart';
+import '../sync/sync_screen.dart';
+import '../home/home_screen.dart';
+
 
 // ─── SharedPreferences helpers ────────────────────────────────────────────────
 // Defined here so main.dart can import them directly
@@ -301,7 +304,11 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
 
       // Replace login with home — back button won't return to login
-      Navigator.of(context).pushReplacementNamed(AppRouter.home);
+            Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const HomeScreen()),
+        (_) => false,
+      );
+
     } else {
       HapticFeedback.heavyImpact();
       if (!mounted) return;

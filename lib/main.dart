@@ -89,7 +89,7 @@ class GodownApp extends StatefulWidget {
 }
 
 class _GodownAppState extends State<GodownApp> with WidgetsBindingObserver {
-
+final _navigatorKey = GlobalKey<NavigatorState>();
 Widget _resolveHome() {
   switch (widget.startRoute) {
       case _StartRoute.resumePin:
@@ -200,7 +200,7 @@ Widget _resolveHome() {
       darkTheme:                 darkTheme,
       home: _resolveHome(),
       onGenerateRoute: (settings) => AppRouter.onGenerateRoute(settings),
-      navigatorKey: GlobalKey<NavigatorState>(),
+      navigatorKey: _navigatorKey,
     );
   }
 }
