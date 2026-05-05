@@ -94,19 +94,16 @@ class OnboardingScreen extends StatelessWidget {
                       backgroundColor: t.primary,
                       foregroundColor: Colors.white,
                       elevation:       0,
+                      textStyle: const TextStyle(
+                        fontFamily: 'Inter',
+                        fontSize:   15,
+                        fontWeight: FontWeight.w600,
+                      ),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(AppSpacing.radius),
                       ),
                     ),
-                    child: Text(
-                      'Register New Shop',
-                      style: TextStyle(
-                        fontFamily: AppFonts.sans,
-                        fontSize:   15,
-                        fontWeight: FontWeight.w600,
-                        color:      Colors.white,
-                      ),
-                    ),
+                    child: const Text('Register New Shop'),
                   ),
                 ),
 
@@ -122,22 +119,19 @@ class OnboardingScreen extends StatelessWidget {
                         builder: (_) => const JoinShopScreen(),
                       ),
                     ),
-                    style: OutlinedButton.styleFrom(
+                     style: OutlinedButton.styleFrom(
                       foregroundColor: t.primary,
                       side:            BorderSide(color: t.border, width: 1.5),
+                      textStyle: const TextStyle(
+                        fontFamily: 'Inter',
+                        fontSize:   15,
+                        fontWeight: FontWeight.w600,
+                      ),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(AppSpacing.radius),
                       ),
                     ),
-                    child: Text(
-                      'Join Existing Shop',
-                      style: TextStyle(
-                        fontFamily: AppFonts.sans,
-                        fontSize:   15,
-                        fontWeight: FontWeight.w600,
-                        color:      t.primary,
-                      ),
-                    ),
+                    child: const Text('Join Existing Shop'),
                   ),
                 ),
 

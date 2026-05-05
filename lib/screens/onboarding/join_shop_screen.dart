@@ -202,6 +202,7 @@ class _JoinShopScreenState extends State<JoinShopScreen> {
                     backgroundColor: t.primary,
                     foregroundColor: Colors.white,
                     elevation:       0,
+                    textStyle: const TextStyle(fontFamily: 'Inter', fontSize: 15, fontWeight: FontWeight.w600),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(AppSpacing.radius)),
                   ),
@@ -209,10 +210,7 @@ class _JoinShopScreenState extends State<JoinShopScreen> {
                       ? const SizedBox(width: 20, height: 20,
                           child: CircularProgressIndicator(
                               strokeWidth: 2, color: Colors.white))
-                      : Text('Join Shop',
-                          style: TextStyle(fontFamily: AppFonts.sans,
-                              fontSize: 15, fontWeight: FontWeight.w600,
-                              color: Colors.white)),
+                      : const Text('Join Shop'),
                 ),
               ),
 

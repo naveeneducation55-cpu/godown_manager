@@ -95,28 +95,30 @@ Widget _resolveHome() {
       case _StartRoute.resumePin:
         return const RegisterShopScreen(resumeFromPin: true);
       case _StartRoute.onboarding:
+        return const OnboardingScreen();
       case _StartRoute.app:
         return Consumer<AppDataProvider>(
-        builder: (context, data, _) {
-          if (data.isLoading) {
-            return _SyncLoadingScreen(
-              message: data.retryMessage,
-              attempt: data.retryAttempt,
-              max:     data.maxRetries,
-            );
-          }
-          if (data.syncFailed) {
-            return _SyncErrorScreen(
-              onRetry: () async {
-                await data.retryInitialize();
-                if (!data.syncFailed) data.startRealtimeSync();
-              },
-            );
-          }
-          if (data.isLoggedIn) return const HomeScreen();
-          return const LoginScreen();
-        },
-      );
+          builder: (context, data, _) {
+            debugPrint('_resolveHome: isLoading=${data.isLoading} isLoggedIn=${data.isLoggedIn} syncFailed=${data.syncFailed}');
+            if (data.isLoading) {
+              return _SyncLoadingScreen(
+                message: data.retryMessage,
+                attempt: data.retryAttempt,
+                max:     data.maxRetries,
+              );
+            }
+            if (data.syncFailed) {
+              return _SyncErrorScreen(
+                onRetry: () async {
+                  await data.retryInitialize();
+                  if (!data.syncFailed) data.startRealtimeSync();
+                },
+              );
+            }
+            if (data.isLoggedIn) return const HomeScreen();
+            return const LoginScreen();
+          },
+        );
   }
 }
 
@@ -173,10 +175,22 @@ Widget _resolveHome() {
       );
     }
 
+    const noTransition = PageTransitionsTheme(
+      builders: {
+        TargetPlatform.android: FadeUpwardsPageTransitionsBuilder(),
+        TargetPlatform.iOS:     CupertinoPageTransitionsBuilder(),
+      },
+    );
     final lightTheme = AppTheme.light()
-        .copyWith(extensions: <ThemeExtension<dynamic>>[AppThemeExtension.light()]);
+        .copyWith(
+          extensions:          <ThemeExtension<dynamic>>[AppThemeExtension.light()],
+          pageTransitionsTheme: noTransition,
+        );
     final darkTheme = AppTheme.dark()
-        .copyWith(extensions: <ThemeExtension<dynamic>>[AppThemeExtension.dark()]);
+        .copyWith(
+          extensions:          <ThemeExtension<dynamic>>[AppThemeExtension.dark()],
+          pageTransitionsTheme: noTransition,
+        );
 
     return MaterialApp(
       title:                     'Godown Inventory',
@@ -314,7 +328,7 @@ class _SyncLoadingScreen extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(bottom: 24),
                 child: Text(
-                  'v2.5.0',
+                  'v$kAppVersion',
                   style: TextStyle(
                     fontFamily: 'Inter',
                     fontSize:   11,

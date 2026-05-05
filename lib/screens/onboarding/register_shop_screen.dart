@@ -193,15 +193,14 @@ class _RegisterShopScreenState extends State<RegisterShopScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: t.primary, foregroundColor: Colors.white,
                 elevation: 0,
+                textStyle: const TextStyle(fontFamily: 'Inter', fontSize: 15, fontWeight: FontWeight.w600),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(AppSpacing.radius)),
               ),
               child: _sendingOtp
                   ? const SizedBox(width: 20, height: 20,
                       child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : Text('Send OTP',
-                      style: TextStyle(fontFamily: AppFonts.sans, fontSize: 15,
-                          fontWeight: FontWeight.w600, color: Colors.white)),
+                  : const Text('Send OTP'),
             ),
           ),
         ],
@@ -313,15 +312,14 @@ class _RegisterShopScreenState extends State<RegisterShopScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: t.primary, foregroundColor: Colors.white,
                 elevation: 0,
+                textStyle: const TextStyle(fontFamily: 'Inter', fontSize: 15, fontWeight: FontWeight.w600),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(AppSpacing.radius)),
               ),
               child: _verifyingOtp
                   ? const SizedBox(width: 20, height: 20,
                       child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Text('Verify OTP',
-                      style: TextStyle(fontFamily: AppFonts.sans, fontSize: 15,
-                          fontWeight: FontWeight.w600, color: Colors.white)),
+                  : const Text('Verify OTP'),
             ),
           ),
           const SizedBox(height: 16),
@@ -498,12 +496,11 @@ class _RegisterShopScreenState extends State<RegisterShopScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: t.primary, foregroundColor: Colors.white,
                 elevation: 0,
+                textStyle: const TextStyle(fontFamily: 'Inter', fontSize: 15, fontWeight: FontWeight.w600),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(AppSpacing.radius)),
               ),
-              child: Text('Continue',
-                  style: TextStyle(fontFamily: AppFonts.sans, fontSize: 15,
-                      fontWeight: FontWeight.w600, color: Colors.white)),
+              child: const Text('Continue'),
             ),
           ),
         ],
@@ -584,14 +581,13 @@ class _RegisterShopScreenState extends State<RegisterShopScreen> {
 
                   const SizedBox(height: 12),
 
-                  AnimatedOpacity(
-                    opacity:  hasError ? 1.0 : 0.0,
-                    duration: const Duration(milliseconds: 200),
-                    child: Text(
+                   if (hasError)
+                    Text(
                       _pinError ?? '',
                       style: AppFonts.label(color: t.error),
-                    ),
-                  ),
+                    )
+                  else
+                    const SizedBox(height: 16),
                 ],
               ),
             ),
@@ -633,6 +629,7 @@ class _RegisterShopScreenState extends State<RegisterShopScreen> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: t.primary, foregroundColor: Colors.white,
                       elevation: 0,
+                      textStyle: const TextStyle(fontFamily: 'Inter', fontSize: 15, fontWeight: FontWeight.w600),
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(AppSpacing.radius)),
                     ),
@@ -640,10 +637,7 @@ class _RegisterShopScreenState extends State<RegisterShopScreen> {
                         ? const SizedBox(width: 20, height: 20,
                             child: CircularProgressIndicator(
                                 strokeWidth: 2, color: Colors.white))
-                        : Text('Create Shop',
-                            style: TextStyle(fontFamily: AppFonts.sans,
-                                fontSize: 15, fontWeight: FontWeight.w600,
-                                color: Colors.white)),
+                        : const Text('Create Shop'),
                   ),
                 ),
               ],
