@@ -16,6 +16,7 @@ class OnboardingScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    debugPrint('🟣 OnboardingScreen: build() called');
     final t = context.appTheme;
 
     return PopScope(

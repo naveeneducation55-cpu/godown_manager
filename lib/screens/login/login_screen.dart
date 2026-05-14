@@ -336,6 +336,7 @@ class _StaffTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    debugPrint('🔐 LoginScreen: build() called — staff=${context.watch<AppDataProvider>().staff.length}');
     final t = context.appTheme;
     return GestureDetector(
       onTap: onTap,

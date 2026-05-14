@@ -17,6 +17,9 @@ import '../database/database_helper.dart';
 import '../services/sync_service.dart';
 import '../utils/id_generator.dart';
 import '../services/supabase_service.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../services/oauth_result.dart';
+import '../services/shop_service.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MODELS
@@ -231,9 +234,17 @@ final Map<String, ItemModel>     _itemMap     = {};
 
   StaffModel? _currentStaff;
   bool        _disposed  = false;
-  bool        _isLoading = true;
-  String      _shopId    = '';
+   bool        _isLoading    = false;
+   String      _shopId       = '';
+String      _shopName     = '';
+bool        _isOnboarded  = false;
+bool        _isFirstLaunch = false;
 
+// ── OAuth state — isolated ValueNotifier, does not trigger full rebuild ──
+  final oauthNotifier = ValueNotifier<OAuthResult>(OAuthResult.idle);
+  String? _oauthEmail;
+  String? get oauthEmail => _oauthEmail;
+  StreamSubscription? _oauthSub;
   // Retry state
   bool   _syncFailed    = false;
   int    _retryAttempt  = 0;
@@ -261,6 +272,9 @@ final Map<String, ItemModel>     _itemMap     = {};
   bool                get isLoading      => _isLoading;
   int                 get totalMovements => _movements.length;
   String              get shopId         => _shopId;
+String              get shopName       => _shopName;
+bool                get isFirstLaunch  => _isFirstLaunch;
+  bool                get isOnboarded    => _isOnboarded;
 
   bool   get syncFailed   => _syncFailed;
   int    get retryAttempt => _retryAttempt;
@@ -284,6 +298,7 @@ final Map<String, ItemModel>     _itemMap     = {};
   }
 
   void _notify() {
+    debugPrint('🔵 AppDataProvider._notify: called — listeners will rebuild');
     if (_disposed) return;
     _notifyTimer?.cancel();
     _notifyTimer = Timer(const Duration(milliseconds: 16), () {
@@ -292,6 +307,7 @@ final Map<String, ItemModel>     _itemMap     = {};
   }
 
   void _notifyNow() {
+    debugPrint('🔵 AppDataProvider._notifyNow: called — immediate rebuild');
     if (_disposed) return;
     _notifyTimer?.cancel();
     notifyListeners();
@@ -317,23 +333,125 @@ final Map<String, ItemModel>     _itemMap     = {};
   @override
   void dispose() {
     _notifyTimer?.cancel();
+    _oauthSub?.cancel();
+    oauthNotifier.dispose();
     _disposed = true;
     super.dispose();
   }
 
+// ── OAuth listener — single global listener, owned by provider ────────────
+  void _startOAuthListener() {
+    _oauthSub?.cancel();
+    debugPrint('AppDataProvider: OAuth listener STARTING — single global listener');
+    _oauthSub = Supabase.instance.client.auth.onAuthStateChange.listen(
+      (data) async {
+        debugPrint('AppDataProvider: auth event=${data.event} hasSession=${data.session != null}');
+        if (data.event == AuthChangeEvent.signedIn && data.session != null) {
+          debugPrint('AppDataProvider: signedIn event received — calling _handleOAuthResult');
+          debugPrint('🔴 PRE-OAUTH CHECK: isLoggedIn=${_currentStaff != null} isOnboarded=$_isOnboarded staff=${_staff.length}');
+          await _handleOAuthResult(data.session!);
+        } else {
+          debugPrint('AppDataProvider: ignoring auth event=${data.event}');
+        }
+      },
+    );
+    debugPrint('AppDataProvider: OAuth listener ACTIVE');
+  }
+
+  void stopOAuthListener() {
+    _oauthSub?.cancel();
+    _oauthSub = null;
+    debugPrint('AppDataProvider: OAuth listener stopped');
+  }
+
+  Future<void> _handleOAuthResult(Session session) async {
+    debugPrint('AppDataProvider._handleOAuthResult: START processing');
+    debugPrint('AppDataProvider._handleOAuthResult: userId=${session.user.id}');
+
+    final email = session.user.email;
+    debugPrint('AppDataProvider._handleOAuthResult: email=$email');
+    if (email == null) {
+      debugPrint('AppDataProvider._handleOAuthResult: ERROR — no email in session');
+      oauthNotifier.value = OAuthResult.error;
+      return;
+    }
+
+    debugPrint('AppDataProvider._handleOAuthResult: checking if email exists in shops table');
+    final exists = await ShopService.instance.checkEmailExists(email);
+    debugPrint('AppDataProvider._handleOAuthResult: emailExists=$exists');
+
+    if (exists) {
+      // Sign out — do not leave active session for already-registered email
+      await Supabase.instance.client.auth.signOut();
+      debugPrint('AppDataProvider: email already registered — signed out');
+      oauthNotifier.value = OAuthResult.alreadyRegistered;
+      return;
+    }
+
+    // New email — store for registerShop()
+    ShopService.instance.setOwnerEmail(email);
+    _oauthEmail = email;
+    debugPrint('AppDataProvider: OAuth success email=$email');
+    oauthNotifier.value = OAuthResult.success;
+    debugPrint('🔴 CRITICAL CHECK: isLoggedIn=${_currentStaff != null} currentStaff=$_currentStaff isOnboarded=$_isOnboarded staff count=${_staff.length}');
+  }
+
+  void clearOAuthState() {
+    debugPrint('AppDataProvider: clearOAuthState called — resetting to idle');
+    oauthNotifier.value = OAuthResult.idle;
+    _oauthEmail = null;
+    ShopService.instance.clearOwnerEmail();
+    debugPrint('AppDataProvider: OAuth state cleared');
+  }
+
+  Future<void> markShopIdAlertShown() async {
+  _isFirstLaunch = false;
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setBool('shop_id_alert_shown', true);
+  debugPrint('AppDataProvider: shop_id_alert_shown marked');
+}
+  
   // ═══════════════════════════════════════════════════════════════════════════
   // INITIALIZE
   // ═══════════════════════════════════════════════════════════════════════════
 
   Future<void> initialize() async {
+    debugPrint('🔵 AppDataProvider.initialize: START');
     _isLoading    = true;
     _syncFailed   = false;
     _retryAttempt = 0;
     _retryMessage = 'Loading data...';
     try {
       final prefs = await SharedPreferences.getInstance();
-      _shopId = prefs.getString('current_shop_id') ?? 'SBT-SIL-0001';
-      debugPrint('AppDataProvider: shopId=$_shopId');
+     _shopId       = prefs.getString('current_shop_id') ?? '';
+_shopName     = prefs.getString('current_shop_name') ?? '';
+_isOnboarded  = _shopId.isNotEmpty;
+final isOwner    = prefs.getBool('is_shop_owner') ?? false;
+final alertShown = prefs.getBool('shop_id_alert_shown') ?? false;
+_isFirstLaunch   = _isOnboarded && isOwner && !alertShown;
+debugPrint('AppDataProvider: isFirstLaunch=$_isFirstLaunch isOwner=$isOwner alertShown=$alertShown');
+      debugPrint('AppDataProvider: shopId=$_shopId isOnboarded=$_isOnboarded');
+
+      // Start OAuth listener only during onboarding — not for existing users
+      if (!_isOnboarded) {
+        // Clear any stale Supabase session from previous incomplete onboarding
+        // Prevents initialSession from interfering with fresh onboarding flow
+        final existingSession = Supabase.instance.client.auth.currentSession;
+        if (existingSession != null) {
+          debugPrint('AppDataProvider: stale session detected during onboarding — clearing');
+          await Supabase.instance.client.auth.signOut();
+          debugPrint('AppDataProvider: stale session cleared');
+        }
+        _startOAuthListener();
+      }
+
+      // Fresh install — no shop registered yet
+      // Skip _loadAll() entirely — onboarding flow handles setup
+      if (_shopId.isEmpty) {
+        debugPrint('AppDataProvider: no shop_id — skipping load, showing onboarding');
+        return;
+      }
+
       SupabaseService.instance.setShopId(_shopId);
       DatabaseHelper.instance.setShopId(_shopId);
       await _loadAll();
@@ -341,6 +459,7 @@ final Map<String, ItemModel>     _itemMap     = {};
       debugPrint('AppDataProvider.initialize error: $e\n$st');
     } finally {
       _isLoading = false;
+       debugPrint('🔵 AppDataProvider.initialize: END isOnboarded=$_isOnboarded staff=${_staff.length}');
       _notifyNow();
     }
   }
@@ -404,6 +523,13 @@ final Map<String, ItemModel>     _itemMap     = {};
     final db = DatabaseHelper.instance;
     debugPrint('AppDataProvider: loading from DB...');
 
+// TEMP DEBUG — remove after investigation
+    final rawDb = await DatabaseHelper.instance.db;
+    final allStaff = await rawDb.query('staff');
+    debugPrint('🔴 SQLite RAW staff: ${allStaff.map((s) => "${s['staff_name']}|${s['shop_id']}").toList()}');
+    debugPrint('🔴 Current _shopId: $_shopId');
+    // END TEMP DEBUG
+
     final results = await Future.wait([
       db.getItems(),
       db.getLocations(),
@@ -422,11 +548,13 @@ final Map<String, ItemModel>     _itemMap     = {};
         'staff:${_staff.length} movements:${_movements.length}');
 
      if (_staff.isEmpty && _items.isEmpty && _locations.isEmpty) {
+      debugPrint('🔵 AppDataProvider._loadAll: fresh install detected — calling _handleFreshInstall');
       debugPrint('AppDataProvider: fresh install detected');
       await _handleFreshInstall(db);
     } else {
       // Existing install — silently pull latest from remote in background
       // User sees local data immediately, UI refreshes when pull completes
+      debugPrint('🔵 AppDataProvider._loadAll: existing data found — background refresh');
       _backgroundRefresh();
     }
 

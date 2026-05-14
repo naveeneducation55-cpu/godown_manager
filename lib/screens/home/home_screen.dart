@@ -33,17 +33,30 @@ import '../../router.dart';
 import '../login/login_screen.dart';
 import '../../providers/app_data_provider.dart';
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  @override
+void initState() {
+  super.initState();
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (!mounted) return;
+    final data = context.read<AppDataProvider>();
+    if (data.isFirstLaunch) {
+      _showShopIdAlert(context, data.shopId, data.shopName);
+    }
+  });
+}
 
   // Confirm logout dialog
   Future<void> _confirmLogout(BuildContext context) async {
     final t = context.appTheme;
     final data = context.read<AppDataProvider>();
-    if (data.currentStaff == null) {
-      Navigator.pushNamed(context, AppRouter.login);
-      return;
-    }
+    if (data.currentStaff == null) return;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -73,9 +86,108 @@ class HomeScreen extends StatelessWidget {
     if (confirm == true && context.mounted) {
       await clearSavedStaffId();
       context.read<AppDataProvider>().logout();
-      Navigator.of(context).pushReplacementNamed(AppRouter.login);
+      // _resolveHome Consumer reacts to isLoggedIn=false → shows LoginScreen
     }
   }
+
+void _showShopIdAlert(BuildContext context, String shopId, String shopName) {
+  final t = context.appTheme;
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => AlertDialog(
+      backgroundColor: t.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppSpacing.radius),
+        side: BorderSide(color: t.border, width: 0.8),
+      ),
+      title: Row(
+        children: [
+          Icon(Icons.warning_amber_rounded, color: t.warnFg, size: 22),
+          const SizedBox(width: 8),
+          Text('Save your Shop ID',
+              style: AppFonts.heading(color: t.text).copyWith(fontSize: 16)),
+        ],
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'This is your permanent invite code. It cannot be changed once created. Share it with staff to let them join.',
+            style: AppFonts.body(color: t.text2),
+          ),
+          const SizedBox(height: 20),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+            decoration: BoxDecoration(
+              color: t.primary.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+              border: Border.all(color: t.primary.withValues(alpha: 0.3)),
+            ),
+            child: Column(
+              children: [
+                Text(shopName,
+                    style: AppFonts.label(color: t.text2)
+                        .copyWith(fontSize: 12)),
+                const SizedBox(height: 6),
+                Text(shopId,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontFamily: AppFonts.mono,
+                      fontSize: 24,
+                      fontWeight: FontWeight.w800,
+                      color: t.primary,
+                      letterSpacing: 3,
+                    )),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Icon(Icons.info_outline_rounded, size: 13, color: t.text3),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'This message will not appear again.',
+                  style: AppFonts.label(color: t.text3)
+                      .copyWith(fontSize: 11),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+      actions: [
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton(
+            onPressed: () {
+              context.read<AppDataProvider>().markShopIdAlertShown();
+              Navigator.of(context).pop();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: t.primary,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              textStyle: const TextStyle(
+                fontFamily: AppFonts.sans,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(AppSpacing.radius),
+              ),
+            ),
+            child: const Text('I have noted it down'),
+          ),
+        ),
+      ],
+    ),
+  );
+}
 
   @override
   Widget build(BuildContext context) {

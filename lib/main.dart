@@ -16,6 +16,26 @@ import 'screens/onboarding/onboarding_screen.dart';
 import 'screens/onboarding/register_shop_screen.dart';
 
 const kAppVersion = '2.6.3';
+
+// ── Navigation observer — logs every push/pop/replace ────────────────────────
+class AppNavigatorObserver extends NavigatorObserver {
+  @override
+  void didPush(Route route, Route? previousRoute) {
+    debugPrint('🧭 NAV PUSH: ${previousRoute?.settings.name ?? "null"} → ${route.settings.name ?? route.runtimeType}');
+  }
+  @override
+  void didPop(Route route, Route? previousRoute) {
+    debugPrint('🧭 NAV POP:  ${route.settings.name ?? route.runtimeType} → ${previousRoute?.settings.name ?? "null"}');
+  }
+  @override
+  void didReplace({Route? newRoute, Route? oldRoute}) {
+    debugPrint('🧭 NAV REPLACE: ${oldRoute?.settings.name ?? oldRoute?.runtimeType} → ${newRoute?.settings.name ?? newRoute?.runtimeType}');
+  }
+  @override
+  void didRemove(Route route, Route? previousRoute) {
+    debugPrint('🧭 NAV REMOVE: ${route.settings.name ?? route.runtimeType}');
+  }
+}
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -26,7 +46,7 @@ void main() async {
 
   await SupabaseService.initialize();
   debugPrint('=== KEY: ${AppConfig.supabaseAnonKey.length} chars, enabled: ${AppConfig.isSyncEnabled}');
-
+ 
   // Remote config — non-blocking, offline-safe, 3s timeout
   await RemoteConfigService.instance.fetch();
 
@@ -34,9 +54,8 @@ void main() async {
   final startRoute   = await _resolveStartRoute();
   final dataProvider = AppDataProvider();
 
+  await dataProvider.initialize();
   if (startRoute == _StartRoute.app) {
-    // Only initialize data for normal app flow
-    await dataProvider.initialize();
     dataProvider.startRealtimeSync();
   }
 
@@ -60,7 +79,9 @@ void main() async {
 enum _StartRoute { app, onboarding, resumePin }
 
 Future<_StartRoute> _resolveStartRoute() async {
+  debugPrint('🟡 _resolveStartRoute: called');
   final shopId = await ShopService.instance.getSavedShopId();
+   debugPrint('🟡 _resolveStartRoute: shopId=$shopId');
   if (shopId == null || shopId.isEmpty) {
     debugPrint('main: no shop_id — onboarding');
     return _StartRoute.onboarding;
@@ -90,15 +111,19 @@ class GodownApp extends StatefulWidget {
 
 class _GodownAppState extends State<GodownApp> with WidgetsBindingObserver {
 final _navigatorKey = GlobalKey<NavigatorState>();
+ late final Widget _homeWidget;
 Widget _resolveHome() {
   switch (widget.startRoute) {
       case _StartRoute.resumePin:
         return const RegisterShopScreen(resumeFromPin: true);
       case _StartRoute.onboarding:
+      debugPrint('🟢 _resolveHome: → OnboardingScreen (static)');
         return const OnboardingScreen();
       case _StartRoute.app:
+      debugPrint('🟢 _resolveHome: → Consumer (app flow)');
         return Consumer<AppDataProvider>(
           builder: (context, data, _) {
+            debugPrint('🔴 Consumer REBUILD: isLoading=${data.isLoading} isOnboarded=${data.isOnboarded} isLoggedIn=${data.isLoggedIn} staff=${data.staff.length} syncFailed=${data.syncFailed}');
             debugPrint('_resolveHome: isLoading=${data.isLoading} isLoggedIn=${data.isLoggedIn} syncFailed=${data.syncFailed}');
             if (data.isLoading) {
               return _SyncLoadingScreen(
@@ -115,8 +140,19 @@ Widget _resolveHome() {
                 },
               );
             }
-            if (data.isLoggedIn) return const HomeScreen();
-            return const LoginScreen();
+            debugPrint('Consumer: isLoading=${data.isLoading} isOnboarded=${data.isOnboarded} isLoggedIn=${data.isLoggedIn} syncFailed=${data.syncFailed}');
+    if (!data.isOnboarded) {
+      debugPrint('Consumer → OnboardingScreen');
+      return const OnboardingScreen();
+    }
+    debugPrint('🔴 Consumer CHECK: isLoggedIn=${data.isLoggedIn} isOnboarded=${data.isOnboarded} staff=${data.staff.length} currentStaff=${data.currentStaff?.name}');
+    debugPrint('isLoggedIn: ${data.isLoggedIn} currentStaff: ${data.currentStaff?.name}');
+    if (data.isLoggedIn) {
+      debugPrint('Consumer → HomeScreen');
+      return const HomeScreen();
+    }
+    debugPrint('Consumer → LoginScreen');
+    return const LoginScreen();
           },
         );
   }
@@ -138,6 +174,7 @@ Widget _resolveHome() {
         }
       });
     }
+     _homeWidget = _resolveHome();
   }
 
   @override
@@ -148,6 +185,7 @@ Widget _resolveHome() {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+     debugPrint('🟡 lifecycle: state=$state startRoute=${widget.startRoute}');
     if (state == AppLifecycleState.resumed && widget.startRoute == _StartRoute.app) {
       debugPrint('App resumed — reconnecting realtime + push + pull');
       SyncService.instance.reconnectRealtime();
@@ -198,9 +236,10 @@ Widget _resolveHome() {
       themeMode:                 themeProvider.mode,
       theme:                     lightTheme,
       darkTheme:                 darkTheme,
-      home: _resolveHome(),
-      onGenerateRoute: (settings) => AppRouter.onGenerateRoute(settings),
+      home: _homeWidget,
+      onGenerateRoute: AppRouter.onGenerateRoute,
       navigatorKey: _navigatorKey,
+      navigatorObservers: [AppNavigatorObserver()],
     );
   }
 }

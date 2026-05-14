@@ -6,6 +6,9 @@ import 'screens/stock/stock_screen.dart';
 import 'screens/history/history_screen.dart';
 import 'screens/sync/sync_screen.dart';
 import 'screens/items/manage_screen.dart';
+import 'screens/onboarding/onboarding_screen.dart';
+import 'screens/onboarding/register_shop_screen.dart';
+import 'screens/onboarding/join_shop_screen.dart';
 
 class AppRouter {
   static const home    = '/';
@@ -14,9 +17,12 @@ class AppRouter {
   static const stock   = '/stock';
   static const history = '/history';
   static const items   = '/items';
-  static const sync    = '/sync';
+  static const sync       = '/sync';
+  static const onboarding = '/onboarding';
+  static const register   = '/register';
+  static const join       = '/join';
 
-  static Route<dynamic> onGenerateRoute(RouteSettings settings) {
+  static Route<dynamic>? onGenerateRoute(RouteSettings settings) {
     Widget page;
 
     switch (settings.name) {
@@ -34,7 +40,18 @@ class AppRouter {
         page = const ManageScreen();
       case sync:
         page = const SyncScreen();
+      case onboarding:
+        page = const OnboardingScreen();
+      case register:
+        page = const RegisterShopScreen();
+      case join:
+        page = const JoinShopScreen();
       default:
+      // OAuth callback — let supabase_flutter handle it, don't push any route
+        if (settings.name?.contains('code=') == true ||
+            settings.name?.contains('login-callback') == true) {
+          return null;
+        }
         page = const HomeScreen();
     }
 

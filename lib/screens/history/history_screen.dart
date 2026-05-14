@@ -433,7 +433,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
   @override
   Widget build(BuildContext context) {
     final t        = context.appTheme;
-    final data     = context.watch<AppDataProvider>();
+   final data     = context.read<AppDataProvider>();
+    context.select<AppDataProvider, int>((p) => p.totalMovements);
     final grouped  = _getGrouped(data); // now List<MapEntry<String, List<List<MovementModel>>>>
     // Total transaction count for header badge
     final txnCount = grouped.fold<int>(0, (sum, e) => sum + e.value.length);

@@ -1,29 +1,30 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // register_shop_screen.dart — Phase 3 (v2.7.0)
 //
-// 3-step registration flow:
-//   Step 1 — Phone entry + OTP send
-//   Step 2 — OTP verification (6-box, auto-advance, auto-verify)
-//   Step 3 — Shop details (owner, shop name, city) → Admin PIN setup
+// Registration flow:
+//   Step 1 — Google Sign-In (identity verification)
+//   Step 2 — Shop details (owner name, shop name, city)
+//   Step 3 — Admin PIN setup
 //
 // Navigation rules:
-//   Step 1 ← back to OnboardingScreen (allowed)
-//   Step 2 ← back to Step 1 (allowed)
-//   Step 3 → NO back (OTP verified — phone ownership confirmed)
-//   PIN    → NO back, NO skip
+//   Step 1 (google) ← back to OnboardingScreen (allowed)
+//   Step 2 (details) → NO back (Google verified)
+//   Step 3 (pin)    → NO back, NO skip
 //
 // resumeFromPin: true — used when app killed after shop created but before PIN
 // ─────────────────────────────────────────────────────────────────────────────
 
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../app_theme.dart';
 import '../../providers/app_data_provider.dart';
 import '../../services/shop_service.dart';
 import '../../services/remote_config_service.dart';
-import '../home/home_screen.dart';
+import '../../services/oauth_result.dart';
+import '../../screens/home/home_screen.dart';
+import '../../screens/login/login_screen.dart';
+
 
 class RegisterShopScreen extends StatefulWidget {
   final bool resumeFromPin;
@@ -33,33 +34,21 @@ class RegisterShopScreen extends StatefulWidget {
   State<RegisterShopScreen> createState() => _RegisterShopScreenState();
 }
 
-enum _Step { phone, otp, details, pin }
+enum _Step { google, details, pin }
 
 class _RegisterShopScreenState extends State<RegisterShopScreen> {
 
-  _Step _step = _Step.phone;
+  _Step _step = _Step.google;
 
-  // ── Step 1 ────────────────────────────────────────────────────────────────
-  final _phoneCtrl    = TextEditingController();
-  String? _phoneError;
-  bool    _sendingOtp = false;
-  String  _phone      = '';
-
-  // ── Step 2 ────────────────────────────────────────────────────────────────
-  final List<TextEditingController> _otpCtrls =
-      List.generate(6, (_) => TextEditingController());
-  final List<FocusNode> _otpNodes = List.generate(6, (_) => FocusNode());
-  String? _otpError;
-  bool    _verifyingOtp  = false;
-  bool    _canResend     = false;
-  int     _resendSeconds = 60;
-  Timer?  _resendTimer;
-  int     _otpAttempts   = 0;
+  // ── Step 1 — Google Sign-In ───────────────────────────────────────────────
+  bool    _signingIn   = false;
+  String? _googleError;
 
   // ── Step 3 — details ──────────────────────────────────────────────────────
   final _ownerCtrl = TextEditingController();
   final _shopCtrl  = TextEditingController();
   final _cityCtrl  = TextEditingController();
+  final _phoneCtrl = TextEditingController();
   String? _detailsError;
   String  _previewId = '';
 
@@ -67,38 +56,56 @@ class _RegisterShopScreenState extends State<RegisterShopScreen> {
   String  _pin1        = '';
   String  _pin2        = '';
   bool    _confirmMode = false;
+  bool    _shopCreationStarted = false;
+  AppDataProvider? _dataProvider;
   String? _pinError;
   bool    _creating    = false;
 
   static const _pinKeys = ['1','2','3','4','5','6','7','8','9','','0','⌫'];
 
   @override
-  void initState() {
+   void initState() {
     super.initState();
     if (widget.resumeFromPin) _step = _Step.pin;
     _shopCtrl.addListener(_updatePreview);
     _cityCtrl.addListener(_updatePreview);
+    _phoneCtrl.addListener(_updatePreview);  // triggers button lock recheck
+   WidgetsBinding.instance.addPostFrameCallback((_) {
+  if (!mounted) return;
+  _dataProvider = context.read<AppDataProvider>();
+  debugPrint('RegisterShopScreen: attaching oauthNotifier listener');
+  _dataProvider!.oauthNotifier.addListener(_onOAuthResult);
+});
   }
 
   @override
   void dispose() {
-    _resendTimer?.cancel();
-    _phoneCtrl.dispose();
-    for (final c in _otpCtrls) c.dispose();
-    for (final n in _otpNodes)  n.dispose();
+    // Remove OAuth listener and clear state when leaving registration
+    debugPrint('🟣 RegisterShopScreen: dispose() called — step=$_step');
+  _dataProvider?.oauthNotifier.removeListener(_onOAuthResult);
+  _dataProvider?.clearOAuthState();
+  _dataProvider?.stopOAuthListener();
+  _dataProvider = null;
+    _previewDebounce?.cancel();
     _ownerCtrl.dispose();
     _shopCtrl.dispose();
     _cityCtrl.dispose();
+    _phoneCtrl.dispose();
     super.dispose();
   }
 
+  Timer? _previewDebounce;
   void _updatePreview() {
-    final name = _shopCtrl.text.trim();
-    final city = _cityCtrl.text.trim();
-    if (name.isEmpty || city.isEmpty) { setState(() => _previewId = ''); return; }
-    final code = ShopService.instance.extractShopCode(name);
-    final loc  = ShopService.instance.extractCityCode(city);
-    setState(() => _previewId = '$code-$loc-XXXX');
+    _previewDebounce?.cancel();
+    _previewDebounce = Timer(const Duration(milliseconds: 300), () {
+      if (!mounted) return;
+      final name = _shopCtrl.text.trim();
+      final city = _cityCtrl.text.trim();
+      if (name.isEmpty || city.isEmpty) { setState(() => _previewId = ''); return; }
+      final code = ShopService.instance.extractShopCode(name);
+      final loc  = ShopService.instance.extractCityCode(city);
+      setState(() => _previewId = '$code-$loc-XXXX');
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -109,24 +116,17 @@ class _RegisterShopScreenState extends State<RegisterShopScreen> {
   Widget build(BuildContext context) {
     final t = context.appTheme;
     return PopScope(
-      canPop: _step == _Step.phone || _step == _Step.otp,
+      canPop: _step == _Step.google,
       child: Scaffold(
         backgroundColor: t.bg,
-        appBar: (_step == _Step.phone || _step == _Step.otp)
+        appBar: _step == _Step.google
             ? AppBar(
                 backgroundColor: t.bg,
                 elevation:       0,
                 leading: IconButton(
                   icon:  const Icon(Icons.arrow_back_ios_new_rounded),
                   color: t.text,
-                  onPressed: _step == _Step.otp
-                      ? () => setState(() {
-                            _step        = _Step.phone;
-                            _otpError    = null;
-                            _otpAttempts = 0;
-                            for (final c in _otpCtrls) c.clear();
-                          })
-                      : () => Navigator.of(context).pop(),
+                  onPressed: () => Navigator.of(context).pop(),
                 ),
               )
             : null,
@@ -137,260 +137,166 @@ class _RegisterShopScreenState extends State<RegisterShopScreen> {
 
   Widget _buildStep(AppThemeExtension t) {
     switch (_step) {
-      case _Step.phone:   return _buildPhone(t);
-      case _Step.otp:     return _buildOtp(t);
+      case _Step.google:  return _buildGoogle(t);
       case _Step.details: return _buildDetails(t);
       case _Step.pin:     return _buildPin(t);
     }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 1 — PHONE
+  // STEP 1 — GOOGLE SIGN-IN
   // ═══════════════════════════════════════════════════════════════════════════
 
-  Widget _buildPhone(AppThemeExtension t) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(28, 16, 28, 28),
+  Widget _buildGoogle(AppThemeExtension t) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 28),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          const SizedBox(height: 8),
-          Text('Verify your number',
+          const Spacer(flex: 2),
+
+          // Icon
+          Container(
+            width: 64, height: 64,
+            decoration: BoxDecoration(
+              color:        t.surface,
+              borderRadius: BorderRadius.circular(16),
+              border:       Border.all(color: t.border, width: 1),
+            ),
+            child: Icon(Icons.storefront_outlined, size: 32, color: t.primary),
+          ),
+
+          const SizedBox(height: 20),
+
+          Text('Create your shop',
               style: TextStyle(fontFamily: AppFonts.sans, fontSize: 22,
                   fontWeight: FontWeight.w700, color: t.text)),
-          const SizedBox(height: 6),
-          Text("We'll send a one-time code to confirm your number",
-              style: TextStyle(fontFamily: AppFonts.sans, fontSize: 14,
-                  color: t.text2, height: 1.4)),
-          const SizedBox(height: 32),
-          TextFormField(
-            controller:      _phoneCtrl,
-            keyboardType:    TextInputType.phone,
-            autofocus:       true,
-            maxLength:       10,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-            style: TextStyle(fontFamily: AppFonts.sans, fontSize: 16, color: t.text),
-            decoration: InputDecoration(
-              labelText:   'Mobile number',
-              hintText:    '10-digit number',
-              counterText: '',
-              errorText:   _phoneError,
-              prefixIcon: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-                child: Text('+91',
-                    style: TextStyle(fontFamily: AppFonts.sans, fontSize: 15,
-                        fontWeight: FontWeight.w500, color: t.text2)),
-              ),
-              prefixIconConstraints: const BoxConstraints(minWidth: 0),
-            ),
-            onFieldSubmitted: (_) => _sendOtp(),
-          ),
-          const SizedBox(height: 24),
-          SizedBox(
-            width: double.infinity, height: 52,
-            child: ElevatedButton(
-              onPressed: _sendingOtp ? null : _sendOtp,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: t.primary, foregroundColor: Colors.white,
-                elevation: 0,
-                textStyle: const TextStyle(fontFamily: 'Inter', fontSize: 15, fontWeight: FontWeight.w600),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(AppSpacing.radius)),
-              ),
-              child: _sendingOtp
-                  ? const SizedBox(width: 20, height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Text('Send OTP'),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 
-  Future<void> _sendOtp() async {
-    final phone = _phoneCtrl.text.trim();
-    if (!ShopService.instance.isValidIndianPhone(phone)) {
-      setState(() => _phoneError = 'Enter a valid 10-digit mobile number');
-      return;
-    }
-    setState(() { _sendingOtp = true; _phoneError = null; });
-    final result = await ShopService.instance.sendOtp(phone);
-    if (!mounted) return;
-    setState(() => _sendingOtp = false);
-
-    switch (result) {
-      case OtpSendResult.sent:
-        _phone = phone;
-        setState(() { _step = _Step.otp; });
-        _startResendTimer();
-        WidgetsBinding.instance.addPostFrameCallback(
-            (_) => _otpNodes[0].requestFocus());
-      case OtpSendResult.alreadyRegistered:
-        setState(() => _phoneError =
-            'This number is already registered. Join with your invite code.');
-      case OtpSendResult.invalidPhone:
-        setState(() => _phoneError = 'Enter a valid 10-digit mobile number');
-      case OtpSendResult.networkError:
-        setState(() => _phoneError = 'Check internet and try again');
-    }
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 2 — OTP
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  Widget _buildOtp(AppThemeExtension t) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(28, 16, 28, 28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
           const SizedBox(height: 8),
-          Text('Enter OTP',
-              style: TextStyle(fontFamily: AppFonts.sans, fontSize: 22,
-                  fontWeight: FontWeight.w700, color: t.text)),
-          const SizedBox(height: 6),
-          Text('Sent to +91 $_phone',
-              style: TextStyle(fontFamily: AppFonts.sans, fontSize: 14, color: t.text2)),
-          const SizedBox(height: 32),
 
-          // 6 OTP boxes
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: List.generate(6, (i) => SizedBox(
-              width: 44,
-              child: TextFormField(
-                controller:      _otpCtrls[i],
-                focusNode:       _otpNodes[i],
-                keyboardType:    TextInputType.number,
-                textAlign:       TextAlign.center,
-                maxLength:       1,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                style: TextStyle(fontFamily: AppFonts.mono, fontSize: 20,
-                    fontWeight: FontWeight.w600, color: t.text),
-                decoration: InputDecoration(
-                  counterText: '',
-                  contentPadding: const EdgeInsets.symmetric(vertical: 12),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-                    borderSide: BorderSide(color: t.border, width: 1.5),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-                    borderSide: BorderSide(color: t.primary, width: 2),
-                  ),
-                  errorBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-                    borderSide: BorderSide(color: t.error, width: 1.5),
-                  ),
-                  focusedErrorBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-                    borderSide: BorderSide(color: t.error, width: 2),
-                  ),
-                ),
-                onChanged: (val) {
-                  if (val.isNotEmpty && i < 5) _otpNodes[i + 1].requestFocus();
-                  if (val.isEmpty   && i > 0) _otpNodes[i - 1].requestFocus();
-                  if (i == 5 && val.isNotEmpty) _verifyOtp();
-                },
-              ),
-            )),
+          Text(
+            'Sign in with Google to verify your identity\nand set up your shop.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontFamily: AppFonts.sans, fontSize: 14,
+                color: t.text2, height: 1.5),
           ),
 
-          if (_otpError != null) ...[
-            const SizedBox(height: 8),
-            Text(_otpError!,
-                style: TextStyle(fontFamily: AppFonts.sans, fontSize: 12, color: t.error)),
+          const Spacer(flex: 2),
+
+          // Error message
+          if (_googleError != null) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color:        t.errorBg,
+                borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+              ),
+              child: Text(_googleError!,
+                  style: TextStyle(fontFamily: AppFonts.sans,
+                      fontSize: 13, color: t.error)),
+            ),
+            const SizedBox(height: 16),
           ],
 
-          const SizedBox(height: 24),
+          // Google Sign-In button
           SizedBox(
             width: double.infinity, height: 52,
-            child: ElevatedButton(
-              onPressed: _verifyingOtp ? null : _verifyOtp,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: t.primary, foregroundColor: Colors.white,
-                elevation: 0,
-                textStyle: const TextStyle(fontFamily: 'Inter', fontSize: 15, fontWeight: FontWeight.w600),
+            child: OutlinedButton(
+              onPressed: _signingIn ? null : _signInWithGoogle,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: t.text,
+                side:  BorderSide(color: t.border, width: 1.5),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(AppSpacing.radius)),
+                textStyle: const TextStyle(
+                    fontFamily: 'Inter', fontSize: 15, fontWeight: FontWeight.w500),
               ),
-              child: _verifyingOtp
-                  ? const SizedBox(width: 20, height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Text('Verify OTP'),
+              child: _signingIn
+                  ? SizedBox(
+                      width: 20, height: 20,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: t.primary))
+                  : Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        // Google 'G' logo — coloured text
+                        const Text('G',
+                            style: TextStyle(
+                              fontFamily:  AppFonts.sans,
+                              fontSize:    20,
+                              fontWeight:  FontWeight.w700,
+                              color:        Color(0xFF4285F4),
+                            )),
+                        const SizedBox(width: 10),
+                        Text('Continue with Google',
+                            style: TextStyle(fontFamily: AppFonts.sans,
+                                fontSize: 15, fontWeight: FontWeight.w500,
+                                color: t.text)),
+                      ],
+                    ),
             ),
           ),
-          const SizedBox(height: 16),
 
-          // Resend
-          Center(
-            child: _canResend
-                ? TextButton(
-                    onPressed: _resendOtp,
-                    child: Text('Resend OTP',
-                        style: TextStyle(fontFamily: AppFonts.sans, fontSize: 14,
-                            fontWeight: FontWeight.w500, color: t.primary)),
-                  )
-                : Text('Resend in ${_resendSeconds}s',
-                    style: TextStyle(fontFamily: AppFonts.sans, fontSize: 13,
-                        color: t.text3)),
+          const Spacer(flex: 1),
+
+          Padding(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: Text(
+              'Your Google account is only used to verify your identity.\nWe never post or access your data.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontFamily: AppFonts.sans,
+                  fontSize: 11, color: t.text3, height: 1.4),
+            ),
           ),
         ],
       ),
     );
   }
 
-  void _startResendTimer() {
-    _resendSeconds = 60; _canResend = false;
-    _resendTimer?.cancel();
-    _resendTimer = Timer.periodic(const Duration(seconds: 1), (t) {
-      if (!mounted) { t.cancel(); return; }
-      setState(() {
-        _resendSeconds--;
-        if (_resendSeconds <= 0) { _canResend = true; t.cancel(); }
-      });
-    });
-  }
-
-  Future<void> _resendOtp() async {
-    if (!_canResend) return;
-    for (final c in _otpCtrls) c.clear();
-    _otpAttempts = 0;
-    setState(() { _canResend = false; _otpError = null; });
-    await _sendOtp();
-  }
-
-  Future<void> _verifyOtp() async {
-    final token = _otpCtrls.map((c) => c.text).join();
-    if (token.length < 6) {
-      setState(() => _otpError = 'Enter the complete 6-digit OTP');
-      return;
-    }
-    setState(() { _verifyingOtp = true; _otpError = null; });
-    final result = await ShopService.instance.verifyOtp(phone: _phone, token: token);
+ Future<void> _signInWithGoogle() async {
     if (!mounted) return;
-    setState(() => _verifyingOtp = false);
+    setState(() { _signingIn = true; _googleError = null; });
+    // Reset OAuth state before starting
+    _dataProvider?.clearOAuthState();
+    // Just opens browser — result handled by provider listener
+    try {
+      await ShopService.instance.openGoogleSignIn();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _signingIn   = false;
+        _googleError = 'Could not open Google Sign-In. Try again.';
+      });
+    }
+  }
+
+  // Called by ValueNotifier when provider updates OAuth result
+  // No async, no mounted issues — ValueNotifier is safe
+  void _onOAuthResult() {
+    if (!mounted) return;
+    final result = _dataProvider?.oauthNotifier.value ?? OAuthResult.idle;
+    debugPrint('RegisterShopScreen._onOAuthResult: $result');
 
     switch (result) {
-      case OtpVerifyResult.verified:
-        setState(() => _step = _Step.details);
-      case OtpVerifyResult.invalid:
-        _otpAttempts++;
-        final rem = 3 - _otpAttempts;
-        if (rem <= 0) {
-          setState(() => _otpError = 'Too many attempts. Please resend OTP.');
-          for (final c in _otpCtrls) c.clear();
-        } else {
-          setState(() => _otpError =
-              'Incorrect OTP. $rem attempt${rem == 1 ? '' : 's'} remaining.');
-        }
-      case OtpVerifyResult.expired:
-        setState(() => _otpError = 'OTP expired. Tap resend.');
-        for (final c in _otpCtrls) c.clear();
-      case OtpVerifyResult.networkError:
-        setState(() => _otpError = 'Check internet and try again');
+      case OAuthResult.idle:
+        break;
+      case OAuthResult.loading:
+        break;
+      case OAuthResult.success:
+        setState(() { _signingIn = false; _step = _Step.details; });
+      case OAuthResult.alreadyRegistered:
+        setState(() {
+          _signingIn   = false;
+          _googleError = 'This Google account is already registered.\nJoin with your invite code instead.';
+        });
+      case OAuthResult.cancelled:
+        setState(() => _signingIn = false);
+      case OAuthResult.error:
+        setState(() {
+          _signingIn   = false;
+          _googleError = 'Could not complete sign in. Try again.';
+        });
     }
   }
 
@@ -447,6 +353,22 @@ class _RegisterShopScreenState extends State<RegisterShopScreen> {
               prefixIcon: Icon(Icons.location_city_outlined, size: 18, color: t.text3),
             ),
           ),
+          const SizedBox(height: 16),
+
+          TextFormField(
+            controller: _phoneCtrl,
+            keyboardType: TextInputType.phone,
+            maxLength:    13,  // allows +91XXXXXXXXXX
+            style: TextStyle(fontFamily: AppFonts.sans, fontSize: 15, color: t.text),
+            decoration: InputDecoration(
+              labelText:   'Mobile number',
+              hintText:    'e.g. 9876543210',
+              prefixIcon:  Icon(Icons.phone_outlined, size: 18, color: t.text3),
+              counterText: '',  // hide maxLength counter
+              helperText:  '10-digit Indian mobile number',
+              helperStyle: TextStyle(fontFamily: AppFonts.sans, fontSize: 11, color: t.text3),
+            ),
+          ),
 
           // Shop ID preview
           if (_previewId.isNotEmpty) ...[
@@ -492,9 +414,10 @@ class _RegisterShopScreenState extends State<RegisterShopScreen> {
           SizedBox(
             width: double.infinity, height: 52,
             child: ElevatedButton(
-              onPressed: _proceedToPin,
+              onPressed: _canProceed ? _proceedToPin : null,
               style: ElevatedButton.styleFrom(
-                backgroundColor: t.primary, foregroundColor: Colors.white,
+                backgroundColor: _canProceed ? t.primary : t.border,
+                foregroundColor: Colors.white,
                 elevation: 0,
                 textStyle: const TextStyle(fontFamily: 'Inter', fontSize: 15, fontWeight: FontWeight.w600),
                 shape: RoundedRectangleBorder(
@@ -508,6 +431,25 @@ class _RegisterShopScreenState extends State<RegisterShopScreen> {
     );
   }
 
+  // ── Phone validation ──────────────────────────────────────────────────────
+  bool _isValidPhone(String raw) {
+    final cleaned = raw.replaceAll(RegExp(r'[\s\-]'), '');
+    // Strip country code +91 or 91
+    final digits = (cleaned.startsWith('+91') && cleaned.length == 13)
+        ? cleaned.substring(3)
+        : (cleaned.startsWith('91') && cleaned.length == 12)
+            ? cleaned.substring(2)
+            : cleaned;
+    return digits.length == 10 && RegExp(r'^[6-9]\d{9}$').hasMatch(digits);
+  }
+
+  // ── Button lock — true only when all fields valid ─────────────────────────
+  bool get _canProceed =>
+      _ownerCtrl.text.trim().isNotEmpty &&
+      _shopCtrl.text.trim().isNotEmpty &&
+      _cityCtrl.text.trim().isNotEmpty &&
+      _isValidPhone(_phoneCtrl.text.trim());
+
   void _proceedToPin() {
     if (_ownerCtrl.text.trim().isEmpty) {
       setState(() => _detailsError = 'Enter your name'); return;
@@ -518,6 +460,10 @@ class _RegisterShopScreenState extends State<RegisterShopScreen> {
     if (_cityCtrl.text.trim().isEmpty) {
       setState(() => _detailsError = 'Enter city name'); return;
     }
+    if (!_isValidPhone(_phoneCtrl.text.trim())) {
+      setState(() => _detailsError = 'Enter a valid 10-digit mobile number'); return;
+    }
+    debugPrint('RegisterShopScreen._proceedToPin: all fields valid — proceeding to PIN');
     setState(() { _detailsError = null; _step = _Step.pin; });
   }
 
@@ -674,11 +620,19 @@ class _RegisterShopScreenState extends State<RegisterShopScreen> {
   }
 
   Future<void> _createShop() async {
+    if (_shopCreationStarted) {
+      debugPrint('RegisterShopScreen._createShop: duplicate call — ignoring');
+      return;
+    }
+    _shopCreationStarted = true;
+
     if (_pin1 != _pin2) {
+      _shopCreationStarted = false;  // ← reset — user can retry
       setState(() { _pinError = 'PINs do not match. Try again.'; _pin2 = ''; });
       return;
     }
     if (_pin1.length < 4) {
+      _shopCreationStarted = false;  // ← reset — user can retry
       setState(() => _pinError = 'Set a 4-digit PIN'); return;
     }
 
@@ -689,13 +643,15 @@ class _RegisterShopScreenState extends State<RegisterShopScreen> {
       final owner     = _ownerCtrl.text.trim();
       final shopName  = _shopCtrl.text.trim();
       final city      = _cityCtrl.text.trim();
+      final phone     = _phoneCtrl.text.trim();
+
 
       // 1. Create shop in Supabase
       final shopId = await ShopService.instance.registerShop(
         shopName:  shopName,
         city:      city,
         ownerName: owner,
-        phone:     _phone,
+        ownerPhone: phone,
         trialDays: trialDays,
       );
 
@@ -719,29 +675,55 @@ class _RegisterShopScreenState extends State<RegisterShopScreen> {
       final data = context.read<AppDataProvider>();
       await data.initialize();
       data.startRealtimeSync();
+// DEBUG
+debugPrint('🟢 _createShop: mounted=$mounted staff=${data.staff.length} isLoggedIn=${data.isLoggedIn}');
+if (!mounted) {
+  debugPrint('🔴 _createShop: NOT MOUNTED — loginWithoutPin will not fire');
+  return;
+}
 
       // 5. Auto-login as admin
       final admin = data.staff.firstWhere(
         (s) => s.isAdmin,
         orElse: () => data.staff.first,
       );
-      data.loginWithoutPin(staffId: admin.id);
-
+      debugPrint('🟢 _createShop: logging in as ${admin.name} isAdmin=${admin.isAdmin}');
+       data.loginWithoutPin(staffId: admin.id);
+      debugPrint('🟢 _createShop: loginWithoutPin called — isLoggedIn=${data.isLoggedIn}');
       if (!mounted) return;
+      // Replace entire stack with HomeScreen — onboarding complete
       Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const HomeScreen()),
-        (_) => false,
-      );
+  MaterialPageRoute(
+    builder: (_) => Consumer<AppDataProvider>(
+      builder: (context, data, _) {
+        if (data.isLoggedIn) return const HomeScreen();
+        return const LoginScreen();
+      },
+    ),
+  ),
+  (_) => false,
+);
+      // loginWithoutPin() → isLoggedIn=true → Consumer in _resolveHome shows HomeScreen
+
     } on ShopAlreadyExistsException {
+      _shopCreationStarted = false;
       setState(() {
         _creating = false;
-        _pinError = 'This phone is already registered.';
+        _pinError = 'This Google account is already registered. Use Join instead.';
       });
-    } catch (e) {
+     } catch (e) {
       debugPrint('RegisterShopScreen._createShop error: $e');
+      _shopCreationStarted = false;  // ← reset — user can retry
+      String msg = 'Could not create shop. Check internet and try again.';
+      if (e.toString().contains('already') ||
+          e.toString().contains('duplicate') ||
+          e.toString().contains('unique') ||
+          e.toString().contains('23505')) {
+        msg = 'This email is already registered. Go back and use "Join with invite code".';
+      }
       setState(() {
         _creating = false;
-        _pinError = 'Could not create shop. Check internet and try again.';
+        _pinError = msg;  // ← use msg, not hardcoded string
       });
     }
   }
