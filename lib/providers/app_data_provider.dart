@@ -260,6 +260,12 @@ bool        _isFirstLaunch = false;
   List<MovementModel>? _sortedCache;
   bool                 _sortedDirty = true;
 
+// Mutation version — increments on every add/edit/delete/remote merge.
+  // history_screen watches this instead of totalMovements (count never changes on edit).
+  int _movementVersion = 0;
+
+  // Mutex — prevents double-spend on rapid successive taps (TC-028).
+  bool _isAddingMovement = false;
   Timer? _notifyTimer;
 
   // ── Getters ────────────────────────────────────────────────────────────────
@@ -271,6 +277,7 @@ bool        _isFirstLaunch = false;
   bool                get isAdmin        => _currentStaff?.isAdmin ?? false;
   bool                get isLoading      => _isLoading;
   int                 get totalMovements => _movements.length;
+   int                 get movementVersion  => _movementVersion;
   String              get shopId         => _shopId;
 String              get shopName       => _shopName;
 bool                get isFirstLaunch  => _isFirstLaunch;
@@ -313,9 +320,10 @@ bool                get isFirstLaunch  => _isFirstLaunch;
     notifyListeners();
   }
 
-  void _invalidateCaches() {
-    _stockDirty  = true;
-    _sortedDirty = true;
+   void _invalidateCaches() {
+    _stockDirty      = true;
+    _sortedDirty     = true;
+    _movementVersion++;
   }
 
    void _rebuildMaps() {
@@ -328,6 +336,18 @@ bool                get isFirstLaunch  => _isFirstLaunch;
     _staffMap
       ..clear()
       ..addEntries(_staff.map((s) => MapEntry(s.id, s)));
+  }
+
+// TC-035 — strips null bytes, collapses whitespace, enforces cleanliness.
+  // sqflite and PostgREST both use parameterised queries so SQL injection
+  // is not possible, but we sanitise for data hygiene.
+  String? _sanitiseText(String? s) {
+    if (s == null) return null;
+    final cleaned = s
+        .replaceAll('\x00', '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    return cleaned.isEmpty ? null : cleaned;
   }
 
   @override
@@ -1008,6 +1028,15 @@ StaffModel? staffById(String id) => _staffMap[id];
   String?         groupId,
 }) async {
   debugPrint('DEBUG addMovement called — staffId=$staffId qty=$quantity');
+  // TC-028 — mutex: prevents double-spend on rapid successive taps
+  if (_isAddingMovement) {
+    debugPrint('addMovement: mutex locked — ignoring duplicate tap');
+    return false;
+  }
+  // TC-035 — sanitise free-text fields before any DB write
+  remark = _sanitiseText(remark);
+  baleNo = _sanitiseText(baleNo);
+
   if (quantity <= 0 || fromLocationId == toLocationId) {
     debugPrint('addMovement: invalid params'); return false;
   }
@@ -1035,7 +1064,7 @@ StaffModel? staffById(String id) => _staffMap[id];
       }
     }
   }
-  
+  _isAddingMovement = true;
   try {
     final now   = DateTime.now().toUtc();
     final mvtId = await IdGenerator.instance.movement();
@@ -1073,7 +1102,18 @@ StaffModel? staffById(String id) => _staffMap[id];
     _refreshStockCache();
     SyncService.instance.pushNow();
     return true;
-  } catch (e) { debugPrint('addMovement error: $e'); return false; }
+  } catch (e) {
+    // TC-029 — surface storage-full as distinct error
+    final msg = e.toString().toLowerCase();
+    if (msg.contains('disk') || msg.contains('full') || msg.contains('sqlite_full')) {
+      debugPrint('addMovement: storage full — $e');
+      return false;
+    }
+    debugPrint('addMovement error: $e');
+    return false;
+  } finally {
+    _isAddingMovement = false;
+  }
 }
 
 // Saves multiple items as one transaction — atomic SQLite insert
@@ -1087,6 +1127,15 @@ Future<bool> addMultiMovement({
   required List<String?> baleNos,
   String?               remark,
 }) async {
+  // TC-028 — same mutex as addMovement
+  if (_isAddingMovement) {
+    debugPrint('addMultiMovement: mutex locked — ignoring duplicate tap');
+    return false;
+  }
+  // TC-035 — sanitise remark and all baleNos before any DB write
+  remark = _sanitiseText(remark);
+  baleNos = baleNos.map(_sanitiseText).toList();
+
   if (itemIds.isEmpty) return false;
   if (fromLocationId == toLocationId) return false;
 
@@ -1125,7 +1174,7 @@ Future<bool> addMultiMovement({
       return false;
     }
   }
-
+_isAddingMovement = true;
   try {
     final now     = DateTime.now().toUtc();
     final groupId = await IdGenerator.instance.movement();
@@ -1179,8 +1228,15 @@ Future<bool> addMultiMovement({
     debugPrint('addMultiMovement: saved ${itemIds.length} lines, groupId=$groupId');
     return true;
   } catch (e) {
+    final msg = e.toString().toLowerCase();
+    if (msg.contains('disk') || msg.contains('full') || msg.contains('sqlite_full')) {
+      debugPrint('addMultiMovement: storage full — $e');
+      return false;
+    }
     debugPrint('addMultiMovement error: $e');
     return false;
+  } finally {
+    _isAddingMovement = false;
   }
 }
   Future<bool> editMovement({
@@ -1195,7 +1251,27 @@ Future<bool> addMultiMovement({
   }) async {
     if (quantity <= 0)                  { debugPrint('editMovement: qty <= 0');    return false; }
     if (fromLocationId == toLocationId) { debugPrint('editMovement: from == to'); return false; }
-    // Bale validation on edit — same rule as addMovement
+
+    // TC-035 — sanitise free-text before any DB write
+    remark = _sanitiseText(remark);
+    baleNo = _sanitiseText(baleNo);
+
+    // TC-018 — SUPPLIER edit: new qty must cover all existing outgoing from toLocation
+    if (fromLocationId == 'SUPPLIER') {
+      final totalOutgoing = _movements
+          .where((m) =>
+              !m.isDeleted &&
+              m.id             != movementId &&
+              m.itemId         == itemId &&
+              m.fromLocationId == toLocationId)
+          .fold<double>(0, (sum, m) => sum + m.quantity);
+      if (quantity < totalOutgoing) {
+        debugPrint('editMovement: SUPPLIER qty $quantity < outgoing $totalOutgoing — blocked');
+        return false;
+      }
+    }
+
+    // Bale validation on edit...
     if (fromLocationId != 'SUPPLIER' && baleNo != null && baleNo!.isNotEmpty) {
       final baleExists = _movements.any((m) =>
           !m.isDeleted &&

@@ -180,10 +180,12 @@ class DatabaseHelper {
       debugPrint('DatabaseHelper: migrated v4→v5 — is_final_destination added');
     }
     if (oldVersion < 6) {
-      await db.execute('ALTER TABLE $tMovements ADD COLUMN group_id TEXT');
-      await db.execute(
-        'UPDATE $tMovements SET group_id = movement_id WHERE group_id IS NULL',
-      );
+      await db.transaction((txn) async {
+        await txn.execute('ALTER TABLE $tMovements ADD COLUMN group_id TEXT');
+        await txn.execute(
+          'UPDATE $tMovements SET group_id = movement_id WHERE group_id IS NULL',
+        );
+      });
       debugPrint('DatabaseHelper: migrated v5→v6 — group_id added');
     }
     if (oldVersion < 7) {

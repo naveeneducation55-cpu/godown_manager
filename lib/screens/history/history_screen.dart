@@ -325,23 +325,23 @@ class _HistoryScreenState extends State<HistoryScreen> {
   // Cached filter+group result — recomputed only when inputs change
   List<MovementModel>?                                    _cachedFiltered;
   List<MapEntry<String, List<List<MovementModel>>>>?      _cachedGrouped;
-  int    _lastMovementCount = -1;
-  String _lastSearch        = '';
-  _DateFilter _lastFilter   = _DateFilter.all;
+  int    _lastMovementVersion = -1; // tracks edits AND adds (not just count)
+  String _lastSearch          = '';
+  _DateFilter _lastFilter     = _DateFilter.all;
 
-  List<MapEntry<String, List<List<MovementModel>>>> _getGrouped(AppDataProvider data) {
-    final count = data.sortedMovements.length;
+   List<MapEntry<String, List<List<MovementModel>>>> _getGrouped(AppDataProvider data) {
+    final version = data.movementVersion;
     if (_cachedGrouped != null &&
-        count       == _lastMovementCount &&
+        version     == _lastMovementVersion &&
         _search     == _lastSearch &&
         _dateFilter == _lastFilter) {
       return _cachedGrouped!;
     }
-    _cachedFiltered    = _filter(data);
-    _cachedGrouped     = _group(_cachedFiltered!);
-    _lastMovementCount = count;
-    _lastSearch        = _search;
-    _lastFilter        = _dateFilter;
+    _cachedFiltered      = _filter(data);
+    _cachedGrouped       = _group(_cachedFiltered!);
+    _lastMovementVersion = version;
+    _lastSearch          = _search;
+    _lastFilter          = _dateFilter;
     return _cachedGrouped!;
   }
 
@@ -434,7 +434,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Widget build(BuildContext context) {
     final t        = context.appTheme;
    final data     = context.read<AppDataProvider>();
-    context.select<AppDataProvider, int>((p) => p.totalMovements);
+    // Watch movementVersion — catches edits (qty change) AND adds/deletes.
+  // totalMovements (count) misses edits since count stays the same.
+  context.select<AppDataProvider, int>((p) => p.movementVersion);
     final grouped  = _getGrouped(data); // now List<MapEntry<String, List<List<MovementModel>>>>
     // Total transaction count for header badge
     final txnCount = grouped.fold<int>(0, (sum, e) => sum + e.value.length);
@@ -528,15 +530,19 @@ class _HistoryScreenState extends State<HistoryScreen> {
             ),
 
             // Movement list
-            Expanded(
-              child: grouped.isEmpty
-                  ? EmptyState(
-                      icon:    Icons.history_rounded,
-                      message: _search.isNotEmpty
-                          ? 'No records match "$_search"'
-                          : 'No movements recorded yet.',
-                    )
-                  : _buildFlatList(context, grouped, data, t),
+           Expanded(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 220),
+                child: grouped.isEmpty
+                    ? EmptyState(
+                        key:     const ValueKey('empty'),
+                        icon:    Icons.history_rounded,
+                        message: _search.isNotEmpty
+                            ? 'No records match "$_search"'
+                            : 'No movements recorded yet.',
+                      )
+                    : _buildFlatList(context, grouped, data, t),
+              ),
             ),
           ],
         ),
@@ -557,7 +563,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
     items.addAll(group.value);         // List<MovementModel> = txn row
   }
 
-  return ListView.builder(
+   return ListView.builder(
+    key: const ValueKey('history-list'),
     padding: AppSizes.pagePadding(context).copyWith(top: 4, bottom: AppSpacing.lg),
     itemCount: items.length,
     itemBuilder: (_, i) {

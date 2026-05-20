@@ -222,10 +222,28 @@ void _showShopIdAlert(BuildContext context, String shopId, String shopName) {
             const SizedBox(width: AppSpacing.sm),
             // App title — spec says "Inventory App"
             Expanded(
-              child: Text(
-                'Inventory App',
-                style: AppFonts.heading(color: t.text),
-                overflow: TextOverflow.ellipsis,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Inventory App',
+                    style: AppFonts.heading(color: t.text),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Builder(
+                    builder: (ctx) {
+                      final sid = ctx.select<AppDataProvider, String>((p) => p.shopId);
+                      return sid.isNotEmpty
+                          ? Text(
+                              sid,
+                              style: AppFonts.monoStyle(size: 10, color: t.text3),
+                              overflow: TextOverflow.ellipsis,
+                            )
+                          : const SizedBox.shrink();
+                    },
+                  ),
+                ],
               ),
             ),
           ],

@@ -67,10 +67,11 @@ class ShopInfo {
 
   bool get isPaidActive =>
       plan == 'active' &&
-      paidUntil != null &&
-      DateTime.now().toUtc().isBefore(paidUntil!);
+      (paidUntil == null || DateTime.now().toUtc().isBefore(paidUntil!));
 
-  bool get isActive => isTrialActive || isPaidActive;
+  bool get isValidPlan => plan == 'valid';
+
+  bool get isActive => isTrialActive || isPaidActive || isValidPlan;
 
   factory ShopInfo.fromMap(Map<String, dynamic> m) => ShopInfo(
         shopId:      m['shop_id']      as String,
@@ -261,10 +262,20 @@ class ShopService {
   // VALIDATE INVITE CODE
   // ═══════════════════════════════════════════════════════════════════════════
 
+  // TC-008 — format: exactly AAA-BBB-NNNN (3 letters - 3 letters - 4 digits)
+  static final _shopIdRegex = RegExp(r'^[A-Z]{3}-[A-Z]{3}-\d{4}$');
+
   Future<ShopValidationResult> validateInviteCode(String code) async {
     final trimmed = code.trim().toUpperCase();
     debugPrint('ShopService.validateInviteCode: $trimmed');
     if (trimmed.isEmpty) return ShopValidationResult.notFound;
+
+    // TC-008 — reject malformed codes before touching Supabase
+    if (!_shopIdRegex.hasMatch(trimmed)) {
+      debugPrint('ShopService.validateInviteCode: invalid format — $trimmed');
+      return ShopValidationResult.notFound;
+    }
+
     try {
       final result = await _client
           .from('shops')
