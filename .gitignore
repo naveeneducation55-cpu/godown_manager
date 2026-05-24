@@ -24,7 +24,6 @@ lib/config/secrets.dart
 lib/config/clientId
 lib/config/clientId2
 .env
-lib/config/secrets.dart
 lib/clientIdGoogle.json
 *.secret
 
