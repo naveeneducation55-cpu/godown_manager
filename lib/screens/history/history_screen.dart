@@ -187,7 +187,7 @@ class _TxnRowState extends State<_TxnRow> {
         decoration: widget.isLast
             ? null
             : BoxDecoration(border: Border(
-                bottom: BorderSide(color: t.border, width: 0.5))),
+                bottom: BorderSide(color: t.border, width: 2.0))),
         padding: const EdgeInsets.symmetric(vertical: 11),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -196,20 +196,20 @@ class _TxnRowState extends State<_TxnRow> {
             Text.rich(TextSpan(children: [
               TextSpan(
                 text:  _fmtTime(anchor.createdAt),
-                style: AppFonts.monoStyle(size: 13, color: t.text3)),
+                style: AppFonts.monoStyle(size: 13, color: t.text, weight: FontWeight.w500)),
               TextSpan(
                 text:  '  ·  ',
-                style: AppFonts.monoStyle(size: 13, color: t.border)),
+                style: AppFonts.monoStyle(size: 13, color: t.border, weight: FontWeight.w500)),
               TextSpan(
                 text:  staff.name,
                 style: AppFonts.monoStyle(
-                    size: 13, color: t.text2, weight: FontWeight.w600)),
+                    size: 13, color: t.text, weight: FontWeight.w600)),
               TextSpan(
                 text:  '  ·  ',
                 style: AppFonts.monoStyle(size: 13, color: t.border)),
               TextSpan(
                 text:  '$fromName → ${to?.name ?? '—'}',
-                style: AppFonts.monoStyle(size: 13, color: t.text2)),
+                style: AppFonts.monoStyle(size: 13, color: t.text,weight: FontWeight.w500)),
             ]), softWrap: true),
             const SizedBox(height: 6),
             // Item lines
@@ -266,9 +266,9 @@ class _TxnRowState extends State<_TxnRow> {
               const SizedBox(height: 5),
               Text.rich(TextSpan(children: [
                 TextSpan(text: '✎ ',
-                    style: AppFonts.monoStyle(size: 13, color: t.warnFg)),
+                    style: AppFonts.monoStyle(size: 13, color: t.primaryFg,weight: FontWeight.w500)),
                 TextSpan(text: 'edited',
-                    style: AppFonts.monoStyle(size: 13, color: t.warnFg)),
+                    style: AppFonts.monoStyle(size: 13, color: t.warnFg,weight: FontWeight.w500)),
               ])),
             ],
           ],
@@ -458,13 +458,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 padding: const EdgeInsets.symmetric(
                     horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
+                  
                   color: t.primary.withValues(alpha: .1),
                   borderRadius:
-                      BorderRadius.circular(AppSpacing.radiusXs),
+                      BorderRadius.circular(AppSpacing.radiusSm),
                 ),
                 child: Text(
                   '$txnCount transactions',
-                  style: AppFonts.monoStyle(size: 11, color: t.primary),
+                  style: AppFonts.monoStyle(size: 12, color: t.primary,weight: FontWeight.w600),
                 ),
               ),
             ),

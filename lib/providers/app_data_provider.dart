@@ -1017,7 +1017,7 @@ StaffModel? staffById(String id) => _staffMap[id];
   // ═══════════════════════════════════════════════════════════════════════════
 
 
-  Future<bool> addMovement({  
+ Future<bool> addMovement({  
   required String itemId,
   required String fromLocationId,
   required String toLocationId,
@@ -1028,44 +1028,52 @@ StaffModel? staffById(String id) => _staffMap[id];
   String?         groupId,
 }) async {
   debugPrint('DEBUG addMovement called — staffId=$staffId qty=$quantity');
-  // TC-028 — mutex: prevents double-spend on rapid successive taps
+
+  // TC-028 — lock FIRST before any validation or await.
+  // Prevents two rapid movements both passing stock check in same event loop tick.
   if (_isAddingMovement) {
     debugPrint('addMovement: mutex locked — ignoring duplicate tap');
     return false;
   }
-  // TC-035 — sanitise free-text fields before any DB write
-  remark = _sanitiseText(remark);
-  baleNo = _sanitiseText(baleNo);
+  _isAddingMovement = true;
 
-  if (quantity <= 0 || fromLocationId == toLocationId) {
-    debugPrint('addMovement: invalid params'); return false;
-  }
-  if (fromLocationId != 'SUPPLIER') {
-    final stock = getStock();
-    final entry = stock.where((s) =>
-        s.item.id     == itemId &&
-        s.location.id == fromLocationId,
-    ).toList();
-    final available = entry.isEmpty ? 0.0 : entry.first.balance;
-    if (quantity > available) {
-      debugPrint('addMovement: blocked — qty $quantity > available $available');
+  try {
+    // TC-035 — sanitise free-text before any DB write
+    remark = _sanitiseText(remark);
+    baleNo = _sanitiseText(baleNo);
+
+    if (quantity <= 0 || fromLocationId == toLocationId) {
+      debugPrint('addMovement: invalid params');
       return false;
     }
-    // Bale validation — if bale typed, must exist as incoming at from-location
-    if (baleNo != null && baleNo!.isNotEmpty) {
-      final baleExists = _movements.any((m) =>
-          !m.isDeleted &&
-          m.itemId       == itemId &&
-          m.toLocationId == fromLocationId &&
-          m.baleNo       == baleNo);
-      if (!baleExists) {
-        debugPrint('addMovement: bale $baleNo not found at $fromLocationId');
+
+    if (fromLocationId != 'SUPPLIER') {
+      final stock     = getStock();
+      final entry     = stock.where((s) =>
+          s.item.id     == itemId &&
+          s.location.id == fromLocationId,
+      ).toList();
+      final available = entry.isEmpty ? 0.0 : entry.first.balance;
+
+      if (quantity > available) {
+        debugPrint('addMovement: blocked — qty $quantity > available $available');
         return false;
       }
+
+      // Bale validation — bale must exist as incoming at from-location
+      if (baleNo != null && baleNo!.isNotEmpty) {
+        final baleExists = _movements.any((m) =>
+            !m.isDeleted          &&
+            m.itemId       == itemId &&
+            m.toLocationId == fromLocationId &&
+            m.baleNo       == baleNo);
+        if (!baleExists) {
+          debugPrint('addMovement: bale $baleNo not found at $fromLocationId');
+          return false;
+        }
+      }
     }
-  }
-  _isAddingMovement = true;
-  try {
+
     final now   = DateTime.now().toUtc();
     final mvtId = await IdGenerator.instance.movement();
     await DatabaseHelper.instance.insertMovement({
@@ -1102,6 +1110,7 @@ StaffModel? staffById(String id) => _staffMap[id];
     _refreshStockCache();
     SyncService.instance.pushNow();
     return true;
+
   } catch (e) {
     // TC-029 — surface storage-full as distinct error
     final msg = e.toString().toLowerCase();
@@ -1112,6 +1121,7 @@ StaffModel? staffById(String id) => _staffMap[id];
     debugPrint('addMovement error: $e');
     return false;
   } finally {
+    // Always releases — whether validation failed, exception thrown, or success
     _isAddingMovement = false;
   }
 }

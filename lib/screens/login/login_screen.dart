@@ -304,10 +304,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
 
       // Replace login with home — back button won't return to login
-            Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const HomeScreen()),
-        (_) => false,
-      );
+      Navigator.of(context).pushReplacementNamed(AppRouter.home);
 
     } else {
       HapticFeedback.heavyImpact();

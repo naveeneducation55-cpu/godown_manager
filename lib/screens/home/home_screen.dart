@@ -237,7 +237,7 @@ void _showShopIdAlert(BuildContext context, String shopId, String shopName) {
                       return sid.isNotEmpty
                           ? Text(
                               sid,
-                              style: AppFonts.monoStyle(size: 10, color: t.text3),
+                              style: AppFonts.monoStyle(size: 12, color: t.text,weight: FontWeight.w500),
                               overflow: TextOverflow.ellipsis,
                             )
                           : const SizedBox.shrink();
@@ -277,7 +277,7 @@ Consumer<AppDataProvider>(
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Text(
           data.currentStaff?.name ?? 'Login',
-          style: AppFonts.monoStyle(size: 11, color: t.primary),
+          style: AppFonts.monoStyle(size: 12, color: t.primary , weight: FontWeight.w600),
         ),
         if (data.isAdmin) ...[
           const SizedBox(width: 4),

@@ -6,7 +6,7 @@ import '../../common_widgets.dart';
 import '../../providers/app_data_provider.dart';
 
 
-// State for each item line in a multi-item movement
+// State for each item line in a multi-itemj movement
 class _ItemLineState {
   ItemModel?   selectedItem;
   final qtyCtrl    = TextEditingController();
@@ -15,6 +15,11 @@ class _ItemLineState {
   final itemFocus  = FocusNode();
   List<ItemModel> visibleItems = [];
   bool showItemList = false;
+
+  // Error state — set by _handleSave on validation failure
+  bool   hasStockError = false;
+  bool   hasBaleError  = false;
+  String errorMessage  = '';
 
   void dispose() {
     qtyCtrl.dispose();
@@ -76,7 +81,14 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
 
   // ── Save ─────────────────────────────────────────────────────────────────────
   Future<void> _handleSave() async {
-    
+    // Clear all previous error states before re-validating
+    for (final line in _lines) {
+      line.hasStockError = false;
+      line.hasBaleError  = false;
+      line.errorMessage  = '';
+    }
+    setState(() {});
+
     // Validate form
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
@@ -155,8 +167,8 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
 
       if (!mounted) return;
 
-      if (!ok) {
-        showError(context, 'Could not save. Check stock levels and bale numbers.');
+       if (!ok) {
+        _highlightFailingLines(data);
         setState(() => _isSaving = false);
         return;
       }
@@ -203,6 +215,42 @@ class _AddMovementScreenState extends State<AddMovementScreen> {
     final ampm = n.hour >= 12 ? 'PM' : 'AM';
     return '$h:$min $ampm';
   }
+
+  void _highlightFailingLines(AppDataProvider data) {
+  for (int i = 0; i < _lines.length; i++) {
+    final line = _lines[i];
+    if (line.selectedItem == null) continue;
+    final fromId = _isRestock ? 'SUPPLIER' : _selectedFrom?.id ?? '';
+    if (fromId == 'SUPPLIER') continue;
+
+    final qty       = double.tryParse(line.qtyCtrl.text.trim()) ?? 0;
+    final available = data.getStock()
+        .where((s) =>
+            s.item.id     == line.selectedItem!.id &&
+            s.location.id == fromId)
+        .fold(0.0, (sum, s) => sum + s.balance);
+
+    if (qty > available) {
+      line.hasStockError = true;
+      line.errorMessage  =
+          'Only ${available.toStringAsFixed(available.truncateToDouble() == available ? 0 : 1)}'
+          ' ${line.selectedItem!.unit} available.';
+    }
+
+    final baleNo = line.baleNoCtrl.text.trim();
+    if (!line.hasStockError && baleNo.isNotEmpty) {
+       final baleExists = data.sortedMovements.any((m) =>
+          !m.isDeleted &&
+          m.itemId       == line.selectedItem!.id &&
+          m.toLocationId == fromId &&
+          m.baleNo       == baleNo);
+      if (!baleExists) {
+        line.hasBaleError = true;
+        line.errorMessage = 'Bale "$baleNo" not found at this location.';
+      }
+    }
+  }
+}
 
   // ── Build ─────────────────────────────────────────────────────────────────────
   @override
@@ -437,14 +485,22 @@ Widget _buildItemLine(
   _ItemLineState    line,
   int               index,
 ) {
-  final isFirst = index == 0;
-  return Container(
+  final isFirst  = index == 0;
+  final hasError = line.hasStockError || line.hasBaleError;
+  return AnimatedContainer(
+    duration: const Duration(milliseconds: 250),
+    curve:    Curves.easeOut,
     margin: const EdgeInsets.only(bottom: AppSpacing.sm),
     padding: const EdgeInsets.all(AppSpacing.md),
     decoration: BoxDecoration(
-      color:        t.surface,
+      color:        hasError
+          ? t.error.withValues(alpha: 0.04)
+          : t.surface,
       borderRadius: BorderRadius.circular(AppSpacing.radius),
-      border:       Border.all(color: t.border, width: 0.8),
+      border: Border.all(
+        color: hasError ? t.error : t.border,
+        width: hasError ? 1.5   : 0.8,
+      ),
     ),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -452,7 +508,14 @@ Widget _buildItemLine(
         // Line header
         Row(children: [
           Text('Item ${index + 1}',
-              style: AppFonts.label(color: t.text3)),
+              style: AppFonts.label(
+                color: hasError ? t.error : t.text3,
+              )),
+          if (hasError) ...[
+            const SizedBox(width: 6),
+            Icon(Icons.warning_amber_rounded,
+                size: 13, color: t.error),
+          ],
           const Spacer(),
           // Remove button — only for non-first lines
           if (!isFirst)
@@ -503,6 +566,25 @@ Widget _buildItemLine(
             ),
           ),
         ]),
+        // Error label — shown only when this line has an error
+        if (hasError) ...[
+          const SizedBox(height: AppSpacing.xs),
+          Row(children: [
+            Icon(Icons.info_outline_rounded,
+                size: 13, color: t.error),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(
+                line.errorMessage.isNotEmpty
+                    ? line.errorMessage
+                    : line.hasBaleError
+                        ? 'Bale number not found at this location.'
+                        : 'Not enough stock at selected location.',
+                style: AppFonts.label(color: t.error),
+      ),
+            ),
+          ]),
+        ],
       ],
     ),
   );
