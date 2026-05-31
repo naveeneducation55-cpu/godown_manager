@@ -24,6 +24,8 @@ import '../../services/remote_config_service.dart';
 import '../../services/oauth_result.dart';
 import '../../screens/home/home_screen.dart';
 import '../../screens/login/login_screen.dart';
+import 'package:flutter/gestures.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 
 class RegisterShopScreen extends StatefulWidget {
@@ -56,6 +58,7 @@ class _RegisterShopScreenState extends State<RegisterShopScreen> {
   String  _pin1        = '';
   String  _pin2        = '';
   bool    _confirmMode = false;
+  bool    _agreedToTerms       = false;
   bool    _shopCreationStarted = false;
   AppDataProvider? _dataProvider;
   String? _pinError;
@@ -410,6 +413,92 @@ class _RegisterShopScreenState extends State<RegisterShopScreen> {
                     fontSize: 12, color: t.error)),
           ],
 
+const SizedBox(height: 20),
+
+          // ── Terms & Privacy checkbox ──────────────────────────────────────
+          GestureDetector(
+            onTap: () => setState(() => _agreedToTerms = !_agreedToTerms),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                // Circle checkbox
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  curve:    Curves.easeOut,
+                  width:  22,
+                  height: 22,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: _agreedToTerms
+                        ? t.primary
+                        : Colors.transparent,
+                    border: Border.all(
+                      color: _agreedToTerms ? t.primary : t.text3,
+                      width: 1.5,
+                    ),
+                  ),
+                  child: _agreedToTerms
+                      ? const Icon(
+                          Icons.check_rounded,
+                          size:  13,
+                          color: Colors.white,
+                        )
+                      : null,
+                ),
+                const SizedBox(width: 10),
+                // Statement with tappable links
+                Expanded(
+                  child: Text.rich(
+                    TextSpan(
+                      style: TextStyle(
+                        fontFamily: AppFonts.sans,
+                        fontSize:   AppTypeScale.sm,
+                        color:      t.text2,
+                        height:     1.4,
+                      ),
+                      children: [
+                        const TextSpan(text: 'I agree to the '),
+                        TextSpan(
+                          text:      'Terms & Conditions',
+                          style:     TextStyle(
+                            color:      t.primary,
+                            fontWeight: FontWeight.w600,
+                            decoration: TextDecoration.underline,
+                            decorationColor: t.primary,
+                          ),
+                          recognizer: TapGestureRecognizer()
+                            ..onTap = () => launchUrl(
+                              Uri.parse('https://YOUR_TERMS_URL'),
+                              mode: LaunchMode.externalApplication,
+                            ),
+                        ),
+                        const TextSpan(text: ' and '),
+                        TextSpan(
+                          text:      'Privacy Policy',
+                          style:     TextStyle(
+                            color:      t.primary,
+                            fontWeight: FontWeight.w600,
+                            decoration: TextDecoration.underline,
+                            decorationColor: t.primary,
+                          ),
+                          recognizer: TapGestureRecognizer()
+                            ..onTap = () => launchUrl(
+                              Uri.parse('https://YOUR_PRIVACY_URL'),
+                              mode: LaunchMode.externalApplication,
+                            ),
+                        ),
+                        const TextSpan(
+                          text: ' of Godown Manager app.',
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+
           const SizedBox(height: 24),
           SizedBox(
             width: double.infinity, height: 52,
@@ -448,7 +537,8 @@ class _RegisterShopScreenState extends State<RegisterShopScreen> {
       _ownerCtrl.text.trim().isNotEmpty &&
       _shopCtrl.text.trim().isNotEmpty &&
       _cityCtrl.text.trim().isNotEmpty &&
-      _isValidPhone(_phoneCtrl.text.trim());
+      _isValidPhone(_phoneCtrl.text.trim()) &&
+      _agreedToTerms;
 
   void _proceedToPin() {
     if (_ownerCtrl.text.trim().isEmpty) {
