@@ -48,9 +48,10 @@ class IdGenerator {
             last_seq INTEGER NOT NULL DEFAULT 0
           )
         ''');
-        for (final p in ['MOV', 'ITM', 'LOC', 'STF']) {
+        for (final p in ['MOV', 'ITM', 'LOC', 'STF', 'FBK']) {
           await db.insert(_tableName, {'prefix': p, 'last_seq': 0});
         }
+
         await db.execute('''
           CREATE TABLE $_deviceTable (
             key   TEXT PRIMARY KEY,
@@ -141,10 +142,11 @@ class IdGenerator {
     }
   }
 
-  Future<String> movement()  => _generate('MOV');
+   Future<String> movement()  => _generate('MOV');
   Future<String> item()      => _generate('ITM');
   Future<String> location()  => _generate('LOC');
   Future<String> staff()     => _generate('STF');
+  Future<String> feedback()  => _generate('FBK');
 
   Future<void> close() async {
     await _db?.close();

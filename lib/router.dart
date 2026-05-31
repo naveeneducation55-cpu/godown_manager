@@ -9,6 +9,7 @@ import 'screens/items/manage_screen.dart';
 import 'screens/onboarding/onboarding_screen.dart';
 import 'screens/onboarding/register_shop_screen.dart';
 import 'screens/onboarding/join_shop_screen.dart';
+import 'screens/feedback/feedback_screen.dart';
 
 class AppRouter {
   static const home    = '/';
@@ -21,6 +22,7 @@ class AppRouter {
   static const onboarding = '/onboarding';
   static const register   = '/register';
   static const join       = '/join';
+  static const feedback   = '/feedback';
 
   static Route<dynamic>? onGenerateRoute(RouteSettings settings) {
     Widget page;
@@ -46,6 +48,8 @@ class AppRouter {
         page = const RegisterShopScreen();
       case join:
         page = const JoinShopScreen();
+      case feedback:
+        page = const FeedbackScreen();
       default:
       // OAuth callback — let supabase_flutter handle it, don't push any route
         if (settings.name?.contains('code=') == true ||

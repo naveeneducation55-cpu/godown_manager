@@ -32,6 +32,10 @@ import '../../theme_provider.dart';
 import '../../router.dart';
 import '../login/login_screen.dart';
 import '../../providers/app_data_provider.dart';
+import '../../services/remote_config_service.dart';
+import '../feedback/feedback_screen.dart';
+import '../../services/feedback_service.dart';
+
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -85,7 +89,9 @@ void initState() {
     );
     if (confirm == true && context.mounted) {
       await clearSavedStaffId();
+      debugPrint('🔴 _confirmLogout: calling logout()');
       context.read<AppDataProvider>().logout();
+      debugPrint('🔴 _confirmLogout: logout() done');
       // _resolveHome Consumer reacts to isLoggedIn=false → shows LoginScreen
     }
   }
@@ -362,6 +368,11 @@ Consumer<AppDataProvider>(
                     variant: _BtnVariant.secondary,
                   ),
                   const SizedBox(height: AppSpacing.xl),
+
+ // ── Feedback button — shown only when flag enabled
+                  //    and not submitted today ──────────────────────────────
+                  _FeedbackButton(),
+                  const SizedBox(height: AppSpacing.sm),
 
                   // ── Sync status row ───────────────────────────────────────
                   _SyncStatusRow(pending: context.watch<AppDataProvider>().pendingSyncCount),
@@ -652,6 +663,98 @@ class _SyncStatusRow extends StatelessWidget {
             Text(
               'details →',
               style: AppFonts.monoStyle(size: 11, color: t.text3),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _FeedbackButton
+//
+// Shown only when:
+//   1. app_config.feedback_enabled = true
+//   2. Staff has not submitted feedback today
+//
+// Hidden entirely (not rendered) in all other cases.
+// Controlled remotely — no APK update needed to toggle.
+// ─────────────────────────────────────────────────────────────────────────────
+class _FeedbackButton extends StatefulWidget {
+  const _FeedbackButton();
+
+  @override
+  State<_FeedbackButton> createState() => _FeedbackButtonState();
+}
+
+class _FeedbackButtonState extends State<_FeedbackButton> {
+
+  bool _loading           = true;
+  bool _submittedToday    = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _check();
+  }
+
+  Future<void> _check() async {
+    final submitted = await FeedbackService.instance.hasSubmittedToday();
+    if (!mounted) return;
+    setState(() {
+      _submittedToday = submitted;
+      _loading        = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t       = context.appTheme;
+    final enabled = RemoteConfigService.instance.feedbackEnabled;
+
+    // Not rendered when flag is disabled
+    if (_loading || !enabled) {
+      return const SizedBox.shrink();
+    }
+debugPrint('🟣 _FeedbackButton.build: loading=$_loading enabled=$enabled submitted=$_submittedToday');
+    return GestureDetector(
+      onTap: () async {
+        await Navigator.of(context).pushNamed(AppRouter.feedback);
+        // Re-check after returning — may have submitted
+        debugPrint('🟣 FeedbackButton: pushing /feedback via pushNamed');
+        _check();
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.md,
+          vertical:   AppSpacing.sm,
+        ),
+        decoration: BoxDecoration(
+          color:        t.primary.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+          border: Border.all(
+            color: t.primary.withValues(alpha: 0.25),
+            width: 0.8,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              Icons.rate_review_outlined,
+              size:  14,
+              color: t.primary,
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            Text(
+              'Share feedback',
+              style: AppFonts.monoStyle(size: 11, color: t.primary),
+            ),
+            const Spacer(),
+            Text(
+              'beta →',
+              style: AppFonts.monoStyle(size: 11, color: t.primary),
             ),
           ],
         ),

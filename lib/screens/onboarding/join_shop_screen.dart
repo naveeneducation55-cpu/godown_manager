@@ -17,6 +17,8 @@ import '../../app_theme.dart';
 import '../../providers/app_data_provider.dart';
 import '../../services/shop_service.dart';
 import '../login/login_screen.dart';
+import '../../router.dart';
+import '../home/home_screen.dart';
 
 class JoinShopScreen extends StatefulWidget {
   const JoinShopScreen({super.key});
@@ -102,8 +104,19 @@ class _JoinShopScreenState extends State<JoinShopScreen> {
       data.startRealtimeSync();
 
       if (!mounted) return;
+       // Mirror register_shop_screen.dart B013 fix — push Consumer as root.
+      // This replaces the static OnboardingScreen home with a reactive
+      // Consumer — so _backgroundRefresh _notifyNow does not revert to
+      // OnboardingScreen when startRoute was 'onboarding'.
       Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        MaterialPageRoute(
+          builder: (_) => Consumer<AppDataProvider>(
+            builder: (context, data, _) {
+              if (data.isLoggedIn) return const HomeScreen();
+              return const LoginScreen();
+            },
+          ),
+        ),
         (_) => false,
       );
     } catch (e) {

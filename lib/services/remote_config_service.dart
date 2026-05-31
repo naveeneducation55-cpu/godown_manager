@@ -36,12 +36,15 @@ const _kDefaults = <String, String>{
   'feature_ios':        'false',
   'feature_web':        'false',
   'max_staff_per_shop': '20',
-  'max_items_per_shop': '500',
+  'max_items_per_shop': '250',
+  'feedback_enabled':   'true',
+  'feedback_min_chars': '5',
+  'feedback_max_chars': '1000',
 };
 
 const _kCacheKey     = 'remote_config_cache';
 const _kCacheTimeKey = 'remote_config_fetched_at';
-const _kCacheTtl     = Duration(hours: 1);
+const _kCacheTtl     = Duration(minutes: 1);
 const _kFetchTimeout = Duration(seconds: 3);
 
 // ── Force update result ───────────────────────────────────────────────────────
@@ -77,6 +80,10 @@ class RemoteConfigService {
   int    get trialDays       => int.tryParse(get('trial_days')) ?? 7;
   String get supportPhone    => get('support_phone');
   String get apkUrl          => get('apk_url');
+   // ── Feedback feature flag ──────────────────────────────────────────────────
+  bool get feedbackEnabled  => isFeatureEnabled('feedback_enabled');
+  int  get feedbackMinChars => int.tryParse(get('feedback_min_chars', '5'))    ?? 5;
+  int  get feedbackMaxChars => int.tryParse(get('feedback_max_chars', '1000')) ?? 1000;
 
   // ── Force update check ─────────────────────────────────────────────────────
 

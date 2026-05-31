@@ -141,12 +141,14 @@ Widget _resolveHome() {
               );
             }
             debugPrint('Consumer: isLoading=${data.isLoading} isOnboarded=${data.isOnboarded} isLoggedIn=${data.isLoggedIn} syncFailed=${data.syncFailed}');
-    if (!data.isOnboarded) {
-      debugPrint('Consumer → OnboardingScreen');
+        if (!data.isOnboarded) {
+      debugPrint('🔴 Consumer → OnboardingScreen — shopId="${data.shopId}" isOnboarded=${data.isOnboarded} isLoading=${data.isLoading}');
       return const OnboardingScreen();
     }
+
     debugPrint('🔴 Consumer CHECK: isLoggedIn=${data.isLoggedIn} isOnboarded=${data.isOnboarded} staff=${data.staff.length} currentStaff=${data.currentStaff?.name}');
     debugPrint('isLoggedIn: ${data.isLoggedIn} currentStaff: ${data.currentStaff?.name}');
+    debugPrint('🔵 Consumer: isLoggedIn=${data.isLoggedIn} isLoading=${data.isLoading}');
     if (data.isLoggedIn) {
       debugPrint('Consumer → HomeScreen');
       return const HomeScreen();

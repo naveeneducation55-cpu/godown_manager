@@ -581,21 +581,20 @@ debugPrint('AppDataProvider: isFirstLaunch=$_isFirstLaunch isOwner=$isOwner aler
     _invalidateCaches();
   }
 
- void _backgroundRefresh() {
-    // Delay 6s — gives startAutoSync pushNow (t=4s) time to complete
-    // so backgroundPullAll does not hit the mutex and skip silently
+void _backgroundRefresh() {
     Future.delayed(const Duration(seconds: 6), () async {
       try {
-        // Step 1 — push any pending from offline period
         await SyncService.instance.pushNow();
-        // Step 2 — pull all missed changes from Supabase since lastSyncAt
         await SyncService.instance.backgroundPullAll();
-        // Step 3 — reload SQLite into memory
         await _reloadMasterData();
         await _reloadMovements();
         debugPrint('AppDataProvider: background refresh complete');
       } catch (e) {
         debugPrint('AppDataProvider._backgroundRefresh error: $e');
+      } finally {
+        // Notify only if still onboarded — prevents ghost navigation
+        // when startRoute was 'onboarding' and home: is still static widget
+        if (_isOnboarded) _notify();
       }
     });
   }
@@ -663,6 +662,8 @@ debugPrint('AppDataProvider: isFirstLaunch=$_isFirstLaunch isOwner=$isOwner aler
     _locations..clear()..addAll(_safeParseLocations(r[1]));
     _staff    ..clear()..addAll(_safeParseStaff(r[2]));
     _movements..clear()..addAll(_safeParseMovements(r[3]));
+    _rebuildMaps();      // ← maps populated — getItemById/getLocationById work
+    _invalidateCaches(); // ← stock + sort caches cleared
     debugPrint('AppDataProvider: after first sync — '
         'items:${_items.length} locations:${_locations.length} '
         'staff:${_staff.length} movements:${_movements.length}');
